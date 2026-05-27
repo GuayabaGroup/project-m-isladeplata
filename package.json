@@ -1,0 +1,39 @@
+{
+  "name": "project-m-isladeplata",
+  "version": "0.0.0",
+  "description": "Isladeplata — agente conversacional de atención al cliente con LangGraph + TypeScript",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "dev": "tsx watch src/main/server.ts",
+    "build": "tsc",
+    "start": "node --enable-source-maps dist/main/server.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check src tests",
+    "lint:fix": "biome check --write src tests",
+    "format": "biome format --write src tests"
+  },
+  "author": "GuayabaGroup",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@sentry/node": "^9.0.0",
+    "axios": "^1.15.0",
+    "dotenv": "^16.6.0",
+    "langsmith": "^0.3.0",
+    "winston": "^3.19.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.0",
+    "@types/node": "^22.19.0",
+    "tsx": "^4.21.0",
+    "typescript": "~5.8.0",
+    "vitest": "^2.1.9"
+  }
+}
