@@ -17,3 +17,12 @@ process.env.LANGSMITH_API_KEY = process.env.LANGSMITH_API_KEY ?? '';
 process.env.LANGSMITH_PROJECT = process.env.LANGSMITH_PROJECT ?? 'isladeplata-test';
 process.env.LANGSMITH_HIDE_INPUTS = process.env.LANGSMITH_HIDE_INPUTS ?? 'false';
 process.env.LANGSMITH_HIDE_OUTPUTS = process.env.LANGSMITH_HIDE_OUTPUTS ?? 'false';
+
+// HTTP clients — dummies en tests para que env.ts no falle al cargar.
+// Los tests unitarios mockean el RetryClient y nunca tocan estas URLs.
+process.env.GUACUCO_URL = process.env.GUACUCO_URL ?? 'http://localhost:4001';
+process.env.GUACUCO_API_KEY = process.env.GUACUCO_API_KEY ?? 'test-guacuco-key';
+process.env.GUACUCO_TIMEOUT_MS = process.env.GUACUCO_TIMEOUT_MS ?? '5000';
+process.env.PARGUITO_URL = process.env.PARGUITO_URL ?? 'http://localhost:4002';
+process.env.PARGUITO_API_KEY = process.env.PARGUITO_API_KEY ?? 'test-parguito-key';
+process.env.PARGUITO_TIMEOUT_MS = process.env.PARGUITO_TIMEOUT_MS ?? '5000';

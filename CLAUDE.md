@@ -40,7 +40,7 @@ pnpm lint:fix          # biome check --write
 ## Estado de los hitos
 
 - **H0 — Setup foundation** ✅
-- H1 — HTTP clients (Guacuco/Parguito)
+- **H1 — HTTP clients (Guacuco/Parguito)** ✅
 - H2 — Canal WhatsApp + pre-grafo
 - H3 — Grafo base + supervisor + tools atómicas
 - H4 — Subgrafo `schedule_appointment`

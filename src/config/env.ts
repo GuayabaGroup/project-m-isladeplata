@@ -23,6 +23,16 @@ const envSchema = z.object({
   LANGSMITH_ENDPOINT: z.string().url().optional(),
   LANGSMITH_HIDE_INPUTS: boolFromString,
   LANGSMITH_HIDE_OUTPUTS: boolFromString,
+
+  // Guacuco — backend de turnos/identidad/operaciones (HTTP, sin Postgres directo)
+  GUACUCO_URL: z.string().url(),
+  GUACUCO_API_KEY: z.string().min(1),
+  GUACUCO_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
+
+  // Parguito — CRM (stub Etapa 3; cuando explota, ParguitoClient retorna defaults)
+  PARGUITO_URL: z.string().url(),
+  PARGUITO_API_KEY: z.string().min(1),
+  PARGUITO_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
 });
 
 export type Env = z.infer<typeof envSchema>;
