@@ -7,10 +7,12 @@ import { IdentityNotFoundError } from '../../../src/core/errors/IdentityNotFound
 import { ToolExecutionError } from '../../../src/core/errors/ToolExecutionError.js';
 import type { ChannelMessage } from '../../../src/core/types/ChannelMessage.js';
 import { EMPTY_CRM_CONTEXT } from '../../../src/core/types/CrmContext.js';
+import type { Outcome } from '../../../src/core/types/Outcome.js';
+import type { CompiledGraph } from '../../../src/graph/compile.js';
 import type { DedupStore } from '../../../src/infrastructure/redis/DedupStore.js';
 import type { RateLimitStore } from '../../../src/infrastructure/redis/RateLimitStore.js';
-import { EchoResponder } from '../../../src/pregraph/EchoResponder.js';
 import type { ResponseDispatcher } from '../../../src/pregraph/ResponseDispatcher.js';
+import type { ThreadResolver } from '../../../src/pregraph/ThreadResolver.js';
 import { Pipeline } from '../../../src/pregraph/pipeline.js';
 
 function makeMessage(overrides?: Partial<ChannelMessage>): ChannelMessage {
@@ -69,7 +71,22 @@ function makeDeps() {
   const guacuco = { resolveIdentity: vi.fn() };
   const parguito = { getCrmContext: vi.fn().mockResolvedValue(EMPTY_CRM_CONTEXT) };
   const dispatcher = { dispatch: vi.fn().mockResolvedValue(undefined) };
-  const echoResponder = new EchoResponder();
+  const threadResolver = {
+    buildThreadId: vi.fn().mockReturnValue('biz-1:cli-1:whatsapp:1'),
+    resolve: vi.fn().mockResolvedValue({
+      threadId: 'biz-1:cli-1:whatsapp:1',
+      hasActiveCheckpoint: false,
+      wasExpired: false,
+    }),
+  };
+  const graph = {
+    invoke: vi.fn().mockResolvedValue({
+      outcome: {
+        action: 'response',
+        pendingReply: { text: '[grafo] Recibido (cliente): "hola"' },
+      } satisfies Outcome,
+    }),
+  };
   const logger = {
     info: vi.fn(),
     warn: vi.fn(),
@@ -83,11 +100,12 @@ function makeDeps() {
       rateLimit: rateLimit as unknown as RateLimitStore,
       guacuco: guacuco as unknown as GuacucoClient,
       parguito: parguito as unknown as ParguitoClient,
-      echoResponder,
+      threadResolver: threadResolver as unknown as ThreadResolver,
+      graph: graph as unknown as CompiledGraph,
       dispatcher: dispatcher as unknown as ResponseDispatcher,
       logger,
     },
-    mocks: { dedup, rateLimit, guacuco, parguito, dispatcher, logger },
+    mocks: { dedup, rateLimit, guacuco, parguito, threadResolver, graph, dispatcher, logger },
   };
 }
 
@@ -102,6 +120,7 @@ describe('Pipeline.process', () => {
     const outcome = await pipeline.process(makeMessage());
     expect(outcome.action).toBe('ignored');
     expect(mocks.guacuco.resolveIdentity).not.toHaveBeenCalled();
+    expect(mocks.graph.invoke).not.toHaveBeenCalled();
     expect(mocks.dispatcher.dispatch).not.toHaveBeenCalled();
   });
 
@@ -112,7 +131,7 @@ describe('Pipeline.process', () => {
 
     const outcome = await pipeline.process(makeMessage());
     expect(outcome.action).toBe('ignored');
-    expect(mocks.dispatcher.dispatch).not.toHaveBeenCalled();
+    expect(mocks.graph.invoke).not.toHaveBeenCalled();
   });
 
   it('dispatches welcome flow for new staff (isNewUser=true)', async () => {
@@ -132,7 +151,7 @@ describe('Pipeline.process', () => {
     expect(outcome.action).toBe('response');
     expect(outcome.pendingReply?.cta).toBeDefined();
     expect(mocks.dispatcher.dispatch).toHaveBeenCalledTimes(1);
-    expect(mocks.rateLimit.checkLimit).not.toHaveBeenCalled();
+    expect(mocks.graph.invoke).not.toHaveBeenCalled();
   });
 
   it('dispatches rate_limited when over limit', async () => {
@@ -149,19 +168,55 @@ describe('Pipeline.process', () => {
     const outcome = await pipeline.process(makeMessage());
     expect(outcome.action).toBe('rate_limited');
     expect(mocks.dispatcher.dispatch).toHaveBeenCalledTimes(1);
-    expect(mocks.parguito.getCrmContext).not.toHaveBeenCalled();
+    expect(mocks.graph.invoke).not.toHaveBeenCalled();
   });
 
-  it('happy path: echo response with CRM context loaded', async () => {
+  it('happy path: invokes graph and dispatches outcome', async () => {
     const { deps, mocks } = makeDeps();
     mocks.guacuco.resolveIdentity.mockResolvedValue(fullIdentity());
     const pipeline = new Pipeline(deps);
 
     const outcome = await pipeline.process(makeMessage({ contentText: 'hola mundo' }));
     expect(outcome.action).toBe('response');
-    expect(outcome.pendingReply?.text).toContain('hola mundo');
     expect(mocks.parguito.getCrmContext).toHaveBeenCalledWith('cli-1');
+    expect(mocks.threadResolver.resolve).toHaveBeenCalledTimes(1);
+    expect(mocks.graph.invoke).toHaveBeenCalledTimes(1);
     expect(mocks.dispatcher.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes identity + crmContext + channelMessage to graph.invoke', async () => {
+    const { deps, mocks } = makeDeps();
+    mocks.guacuco.resolveIdentity.mockResolvedValue(fullIdentity());
+    const pipeline = new Pipeline(deps);
+
+    const message = makeMessage();
+    await pipeline.process(message);
+
+    const [initialState, config] = mocks.graph.invoke.mock.calls[0] ?? [];
+    expect(initialState).toMatchObject({
+      input: { channelMessage: message, receivedAt: message.receivedAt },
+      identity: {
+        tenantUuid: 'biz-1',
+        tenantAlliaId: 'allia-1',
+        profileUuid: 'cli-1',
+        profileType: 'client',
+        platformId: 1,
+        channel: 'whatsapp',
+        timezone: 'America/Argentina/Buenos_Aires',
+        roleId: 1,
+      },
+    });
+    expect(config).toEqual({ configurable: { thread_id: 'biz-1:cli-1:whatsapp:1' } });
+  });
+
+  it('returns ignored when graph result has no outcome', async () => {
+    const { deps, mocks } = makeDeps();
+    mocks.guacuco.resolveIdentity.mockResolvedValue(fullIdentity());
+    mocks.graph.invoke.mockResolvedValue({ outcome: null });
+    const pipeline = new Pipeline(deps);
+
+    const outcome = await pipeline.process(makeMessage());
+    expect(outcome.action).toBe('ignored');
   });
 
   it('catches unexpected errors and dispatches generic error', async () => {
@@ -184,5 +239,6 @@ describe('Pipeline.process', () => {
     const outcome = await pipeline.process(makeMessage());
     expect(outcome.action).toBe('ignored');
     expect(mocks.rateLimit.checkLimit).not.toHaveBeenCalled();
+    expect(mocks.graph.invoke).not.toHaveBeenCalled();
   });
 });

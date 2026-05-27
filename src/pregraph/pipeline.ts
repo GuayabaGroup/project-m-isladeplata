@@ -7,43 +7,47 @@ import { IdentityNotFoundError } from '../core/errors/IdentityNotFoundError.js';
 import type { ChannelMessage } from '../core/types/ChannelMessage.js';
 import type { Identity } from '../core/types/Identity.js';
 import type { Outcome } from '../core/types/Outcome.js';
+import type { CompiledGraph } from '../graph/compile.js';
 import { captureIdpError } from '../infrastructure/observability/sentry.js';
 import type { DedupStore } from '../infrastructure/redis/DedupStore.js';
 import type { RateLimitStore } from '../infrastructure/redis/RateLimitStore.js';
-import { type EchoResponder, buildWelcomeOutcome } from './EchoResponder.js';
 import type { ResponseDispatcher } from './ResponseDispatcher.js';
+import type { ThreadResolver } from './ThreadResolver.js';
+import { buildWelcomeOutcome } from './welcomeFlow.js';
 
 export interface PipelineDeps {
   dedup: DedupStore;
   rateLimit: RateLimitStore;
   guacuco: GuacucoClient;
   parguito: ParguitoClient;
-  echoResponder: EchoResponder;
+  threadResolver: ThreadResolver;
+  graph: CompiledGraph;
   dispatcher: ResponseDispatcher;
   logger: Logger;
 }
 
 /**
- * Pre-graph orchestrator (H2 version): runs the deterministic pipeline
- * BEFORE the LangGraph compiled graph. Steps:
+ * Pre-graph orchestrator (H3.A version). Pasos:
  *
  *   1. Dedup (Redis SET NX)
  *   2. Identity resolve (Guacuco) — IdentityNotFoundError → silent skip
- *   3. Welcome flow if `isNewUser` (staff auto-onboarded by Guacuco)
+ *   3. Welcome flow if `isNewUser` (staff auto-onboarded por Guacuco)
  *   4. Rate limit
- *   5. CRM context (Parguito, defaults if stub) — loaded for parity, not used in H2
- *   6. Echo response (H3 will replace with graph.invoke)
- *   7. Dispatch via channel sender
+ *   5. CRM context (Parguito stub, retorna defaults)
+ *   6. Thread management (compute thread_id + TTL inline)
+ *   7. Graph invoke con identity + crmContext + channelMessage
+ *   8. Dispatch outcome al channel sender
  *
- * The catch global emits Sentry + dispatches a generic error reply.
- * NEVER lets exceptions bubble up to the webhook handler.
+ * Catch global → Sentry + dispatch error genérico. NEVER lets exceptions
+ * bubble up al webhook handler.
  */
 export class Pipeline implements MessageProcessor {
   private readonly dedup: DedupStore;
   private readonly rateLimit: RateLimitStore;
   private readonly guacuco: GuacucoClient;
   private readonly parguito: ParguitoClient;
-  private readonly echoResponder: EchoResponder;
+  private readonly threadResolver: ThreadResolver;
+  private readonly graph: CompiledGraph;
   private readonly dispatcher: ResponseDispatcher;
   private readonly logger: Logger;
 
@@ -52,7 +56,8 @@ export class Pipeline implements MessageProcessor {
     this.rateLimit = deps.rateLimit;
     this.guacuco = deps.guacuco;
     this.parguito = deps.parguito;
-    this.echoResponder = deps.echoResponder;
+    this.threadResolver = deps.threadResolver;
+    this.graph = deps.graph;
     this.dispatcher = deps.dispatcher;
     this.logger = deps.logger;
   }
@@ -121,7 +126,7 @@ export class Pipeline implements MessageProcessor {
       return outcome;
     }
 
-    // 4. Validar invariantes para llamadas downstream
+    // 4. Invariantes pre-downstream
     const businessUuid = identity.businessStaffRoles?.business_uuid;
     const tenantAlliaId = identity.businessStaffRoles?.business_allia_id;
     const platformId = identity.businessStaffRoles?.platform_id;
@@ -136,6 +141,19 @@ export class Pipeline implements MessageProcessor {
       });
       return { action: 'ignored' };
     }
+
+    const internalIdentity: Identity = {
+      tenantUuid: businessUuid,
+      tenantAlliaId,
+      profileUuid,
+      profileType: identity.profileType,
+      platformId,
+      channel: message.channelType,
+      timezone: identity.userTimezone,
+      ...(identity.businessStaffRoles?.role_id
+        ? { roleId: identity.businessStaffRoles.role_id }
+        : {}),
+    };
 
     // 5. Rate limit
     const rateResult = await this.rateLimit.checkLimit({
@@ -154,23 +172,27 @@ export class Pipeline implements MessageProcessor {
       return outcome;
     }
 
-    // 6. CRM context (fetch para validar wiring; en H3 alimenta el state global)
-    await this.parguito.getCrmContext(profileUuid);
+    // 6. CRM context (stub Etapa 3 — defaults; en H3.B se augmenta con upcoming de identity)
+    const crmContext = await this.parguito.getCrmContext(profileUuid);
 
-    // 7. Echo response (placeholder H2; H3 reemplaza con graph.invoke)
-    const internalIdentity: Identity = {
-      tenantUuid: businessUuid,
-      tenantAlliaId,
-      profileUuid,
-      profileType: identity.profileType,
-      platformId,
-      channel: message.channelType,
-      timezone: identity.userTimezone,
-      ...(identity.businessStaffRoles?.role_id
-        ? { roleId: identity.businessStaffRoles.role_id }
-        : {}),
-    };
-    const outcome = this.echoResponder.build(message.contentText, internalIdentity);
+    // 7. Thread management + Graph invoke
+    const thread = await this.threadResolver.resolve(internalIdentity);
+    this.logger.debug('Thread resolved', {
+      thread_id: thread.threadId,
+      has_active: thread.hasActiveCheckpoint,
+      was_expired: thread.wasExpired,
+    });
+
+    const graphResult = await this.graph.invoke(
+      {
+        input: { channelMessage: message, receivedAt: message.receivedAt },
+        identity: internalIdentity,
+        crmContext,
+      },
+      { configurable: { thread_id: thread.threadId } },
+    );
+
+    const outcome: Outcome = graphResult.outcome ?? { action: 'ignored' };
 
     // 8. Dispatch
     await this.dispatcher.dispatch(message, outcome);

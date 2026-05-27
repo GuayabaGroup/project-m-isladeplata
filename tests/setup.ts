@@ -36,3 +36,11 @@ process.env.WHATSAPP_VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN ?? 'test-v
 process.env.WHATSAPP_GRAPH_API_VERSION = process.env.WHATSAPP_GRAPH_API_VERSION ?? 'v22.0';
 process.env.WHATSAPP_CHANNEL_MAP_JSON = process.env.WHATSAPP_CHANNEL_MAP_JSON ?? '{}';
 process.env.APP_SECRET_BY_PLATFORM_JSON = process.env.APP_SECRET_BY_PLATFORM_JSON ?? '{}';
+
+// Postgres del agente (H3) — los tests no tocan Postgres real, solo necesitamos
+// que el schema env pase la validación de Zod.
+process.env.POSTGRES_URL =
+  process.env.POSTGRES_URL ?? 'postgres://test:test@localhost:5432/test_isladeplata';
+process.env.CHECKPOINTER_TTL_SECONDS = process.env.CHECKPOINTER_TTL_SECONDS ?? '86400';
+process.env.CHECKPOINTER_CLEANUP_INTERVAL_SECONDS =
+  process.env.CHECKPOINTER_CLEANUP_INTERVAL_SECONDS ?? '3600';

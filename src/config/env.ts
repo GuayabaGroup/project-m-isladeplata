@@ -55,6 +55,13 @@ const envSchema = z.object({
    * Parsed + validated en `src/config/channels.config.ts`.
    */
   APP_SECRET_BY_PLATFORM_JSON: z.string().default('{}'),
+
+  // Postgres del agente (checkpointer LangGraph; NUNCA Postgres del negocio)
+  POSTGRES_URL: z.string().min(1),
+  /** Hilos sin actividad por más tiempo que este TTL son tratados como expirados. */
+  CHECKPOINTER_TTL_SECONDS: z.coerce.number().int().positive().default(86_400), // 24h
+  /** Frecuencia del job que borra checkpoints viejos para no inflar la tabla. */
+  CHECKPOINTER_CLEANUP_INTERVAL_SECONDS: z.coerce.number().int().positive().default(3_600),
 });
 
 export type Env = z.infer<typeof envSchema>;

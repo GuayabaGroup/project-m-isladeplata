@@ -6,6 +6,11 @@ import { createWhatsAppWebhookHandler } from '../channels/whatsapp/webhook.js';
 import { GuacucoClient } from '../clients/GuacucoClient.js';
 import { ParguitoClient } from '../clients/ParguitoClient.js';
 import { env } from '../config/env.js';
+import { compileGraph } from '../graph/compile.js';
+import {
+  type CheckpointerService,
+  createCheckpointerService,
+} from '../infrastructure/checkpointer/PostgresCheckpointerService.js';
 import { RetryClient } from '../infrastructure/http/RetryClient.js';
 import { errorHandler } from '../infrastructure/http/middleware/errorHandler.js';
 import { registerRoutes } from '../infrastructure/http/registerRoutes.js';
@@ -18,9 +23,10 @@ import {
   connectRedis,
   quitRedis,
 } from '../infrastructure/redis/RedisConnection.js';
+import { initLangSmith } from '../infrastructure/tracing/langsmith.js';
 import { ResponseBuilder } from '../nlg/ResponseBuilder.js';
-import { EchoResponder } from '../pregraph/EchoResponder.js';
 import { ResponseDispatcher } from '../pregraph/ResponseDispatcher.js';
+import { ThreadResolver } from '../pregraph/ThreadResolver.js';
 import { Pipeline } from '../pregraph/pipeline.js';
 
 const WHATSAPP_GRAPH_BASE_URL = 'https://graph.facebook.com';
@@ -35,19 +41,25 @@ export interface BootstrappedApp {
  * Composition root. Orden estricto de inicialización (§3 REGLAS):
  *   1. env validado al import (Zod fail-fast)
  *   2. Sentry
- *   3. Redis
- *   4. HTTP clients (Guacuco, Parguito) + WhatsApp sender
- *   5. Redis stores
- *   6. NLG + dispatcher + responders
- *   7. Pipeline (MessageProcessor)
- *   8. Channel webhook handlers
- *   9. Express app + /health + registerRoutes + errorHandler
+ *   3. LangSmith tracing (opt-in)
+ *   4. Redis
+ *   5. Postgres checkpointer (LangGraph) + setup
+ *   6. HTTP clients (Guacuco, Parguito) + WhatsApp sender
+ *   7. Redis stores
+ *   8. NLG + dispatcher
+ *   9. ThreadResolver + Graph compile
+ *   10. Pipeline (MessageProcessor)
+ *   11. Channel webhook handlers
+ *   12. Express app + /health + registerRoutes + errorHandler
  *
- * Cleanup en orden inverso: Sentry → Redis. Cada paso captura sus errores.
+ * Cleanup en orden inverso: Sentry → Redis → Checkpointer Postgres.
  */
 export async function bootstrap(): Promise<BootstrappedApp> {
   initSentry();
+  initLangSmith();
+
   const redis = await connectRedis(logger);
+  const checkpointer = await createCheckpointerService(logger);
 
   const guacucoHttp = new RetryClient({
     baseURL: env.GUACUCO_URL,
@@ -84,14 +96,17 @@ export async function bootstrap(): Promise<BootstrappedApp> {
 
   const responseBuilder = new ResponseBuilder(logger);
   const dispatcher = new ResponseDispatcher(responseBuilder, whatsappSender, logger);
-  const echoResponder = new EchoResponder();
+
+  const threadResolver = new ThreadResolver(checkpointer, logger);
+  const graph = compileGraph({ checkpointer: checkpointer.saver, logger });
 
   const pipeline = new Pipeline({
     dedup,
     rateLimit,
     guacuco,
     parguito,
-    echoResponder,
+    threadResolver,
+    graph,
     dispatcher,
     logger,
   });
@@ -103,13 +118,24 @@ export async function bootstrap(): Promise<BootstrappedApp> {
   app.use(cors());
 
   app.get('/health', async (_req, res) => {
-    let healthy = true;
+    const checks = { redis: false, postgres: false };
     try {
       await redis.ping();
+      checks.redis = true;
     } catch {
-      healthy = false;
+      // healthy stays false
     }
-    res.status(healthy ? 200 : 503).json({ status: healthy ? 'healthy' : 'degraded' });
+    try {
+      await checkpointer.pool.query('SELECT 1');
+      checks.postgres = true;
+    } catch {
+      // healthy stays false
+    }
+    const healthy = checks.redis && checks.postgres;
+    res.status(healthy ? 200 : 503).json({
+      status: healthy ? 'healthy' : 'degraded',
+      checks,
+    });
   });
 
   registerRoutes(app, { whatsappWebhook });
@@ -118,6 +144,7 @@ export async function bootstrap(): Promise<BootstrappedApp> {
   async function cleanup(): Promise<void> {
     await safeStep('close-sentry', () => closeSentry(2000));
     await safeStep('quit-redis', () => quitRedisSafely(redis));
+    await safeStep('checkpointer-shutdown', () => shutdownCheckpointer(checkpointer));
   }
 
   return { app, cleanup };
@@ -135,4 +162,8 @@ async function safeStep(label: string, fn: () => Promise<void>): Promise<void> {
 
 async function quitRedisSafely(redis: RedisClient): Promise<void> {
   if (redis.isOpen) await quitRedis(redis);
+}
+
+async function shutdownCheckpointer(checkpointer: CheckpointerService): Promise<void> {
+  await checkpointer.shutdown();
 }
