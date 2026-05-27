@@ -26,3 +26,13 @@ process.env.GUACUCO_TIMEOUT_MS = process.env.GUACUCO_TIMEOUT_MS ?? '5000';
 process.env.PARGUITO_URL = process.env.PARGUITO_URL ?? 'http://localhost:4002';
 process.env.PARGUITO_API_KEY = process.env.PARGUITO_API_KEY ?? 'test-parguito-key';
 process.env.PARGUITO_TIMEOUT_MS = process.env.PARGUITO_TIMEOUT_MS ?? '5000';
+
+// HTTP + Redis + WhatsApp (H2)
+process.env.PORT = process.env.PORT ?? '4000';
+process.env.REDIS_URL = process.env.REDIS_URL ?? 'redis://localhost:6379';
+process.env.DEDUP_TTL_SECONDS = process.env.DEDUP_TTL_SECONDS ?? '300';
+process.env.RATE_LIMIT_MAX_PER_MINUTE = process.env.RATE_LIMIT_MAX_PER_MINUTE ?? '20';
+process.env.WHATSAPP_VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN ?? 'test-verify-token';
+process.env.WHATSAPP_GRAPH_API_VERSION = process.env.WHATSAPP_GRAPH_API_VERSION ?? 'v22.0';
+process.env.WHATSAPP_CHANNEL_MAP_JSON = process.env.WHATSAPP_CHANNEL_MAP_JSON ?? '{}';
+process.env.APP_SECRET_BY_PLATFORM_JSON = process.env.APP_SECRET_BY_PLATFORM_JSON ?? '{}';

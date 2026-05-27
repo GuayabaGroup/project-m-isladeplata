@@ -33,6 +33,28 @@ const envSchema = z.object({
   PARGUITO_URL: z.string().url(),
   PARGUITO_API_KEY: z.string().min(1),
   PARGUITO_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
+
+  // HTTP server
+  PORT: z.coerce.number().int().positive().default(4000),
+
+  // Redis (dedup + rate limit únicamente; sesiones van al checkpointer Postgres en H3)
+  REDIS_URL: z.string().min(1),
+  DEDUP_TTL_SECONDS: z.coerce.number().int().positive().default(300),
+  RATE_LIMIT_MAX_PER_MINUTE: z.coerce.number().int().positive().default(20),
+
+  // WhatsApp Cloud API
+  WHATSAPP_VERIFY_TOKEN: z.string().min(1),
+  WHATSAPP_GRAPH_API_VERSION: z.string().default('v22.0'),
+  /**
+   * JSON: `{ "<phone_number_id>": { "access_token": "...", "role": "staff"|"client", "platform_id": 1|2|3 }, ... }`
+   * Parsed + validated en `src/config/channels.config.ts`.
+   */
+  WHATSAPP_CHANNEL_MAP_JSON: z.string().default('{}'),
+  /**
+   * JSON: `{ "1": "<app_secret_allia>", "2": "<app_secret_groomia>", "3": "<app_secret_divapp>" }`
+   * Parsed + validated en `src/config/channels.config.ts`.
+   */
+  APP_SECRET_BY_PLATFORM_JSON: z.string().default('{}'),
 });
 
 export type Env = z.infer<typeof envSchema>;

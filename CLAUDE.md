@@ -41,7 +41,7 @@ pnpm lint:fix          # biome check --write
 
 - **H0 — Setup foundation** ✅
 - **H1 — HTTP clients (Guacuco/Parguito)** ✅
-- H2 — Canal WhatsApp + pre-grafo
+- **H2 — Canal WhatsApp + pre-grafo (echo, sin grafo)** ✅
 - H3 — Grafo base + supervisor + tools atómicas
 - H4 — Subgrafo `schedule_appointment`
 - H5 — Subgrafos `confirm` + `cancel`
