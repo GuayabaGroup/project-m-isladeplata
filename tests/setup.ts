@@ -44,3 +44,9 @@ process.env.POSTGRES_URL =
 process.env.CHECKPOINTER_TTL_SECONDS = process.env.CHECKPOINTER_TTL_SECONDS ?? '86400';
 process.env.CHECKPOINTER_CLEANUP_INTERVAL_SECONDS =
   process.env.CHECKPOINTER_CLEANUP_INTERVAL_SECONDS ?? '3600';
+
+// Anthropic (H3.B) — los tests mockean el SDK; no hace falta key real.
+// El prefijo `test-` está permitido por el refine en env.ts.
+process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY ?? 'test-anthropic-key';
+process.env.SUPERVISOR_MODEL = process.env.SUPERVISOR_MODEL ?? 'claude-haiku-4-5-20251001';
+process.env.RESPONSE_MODEL = process.env.RESPONSE_MODEL ?? 'claude-haiku-4-5-20251001';

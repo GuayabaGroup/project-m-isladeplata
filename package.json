@@ -22,6 +22,7 @@
   "author": "GuayabaGroup",
   "license": "UNLICENSED",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.99.0",
     "@langchain/core": "^1.1.0",
     "@langchain/langgraph": "^1.3.0",
     "@langchain/langgraph-checkpoint-postgres": "^1.0.0",

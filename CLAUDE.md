@@ -42,7 +42,9 @@ pnpm lint:fix          # biome check --write
 - **H0 — Setup foundation** ✅
 - **H1 — HTTP clients (Guacuco/Parguito)** ✅
 - **H2 — Canal WhatsApp + pre-grafo (echo, sin grafo)** ✅
-- H3 — Grafo base + supervisor + tools atómicas
+- **H3.A — Checkpointer Postgres + LangSmith + grafo dummy** ✅
+- **H3.B — Supervisor LLM + tools atómicas + atajos button** ✅
+- **H3 — Grafo base + supervisor + tools atómicas** ✅
 - H4 — Subgrafo `schedule_appointment`
 - H5 — Subgrafos `confirm` + `cancel`
 - H6 — Subgrafo `reschedule` (requiere P3)
@@ -50,3 +52,14 @@ pnpm lint:fix          # biome check --write
 - H8 — Persistencia turnos (P2) + cutover
 
 Actualizar este checklist a medida que se completen hitos.
+
+## Cómo arrancar una sesión nueva
+
+1. Abrir el chat en este directorio (`project-m-isladeplata`). El sistema carga `MEMORY.md` (índice) + este `CLAUDE.md` automáticamente.
+2. Frase recomendada: **"Vamos a seguir con HX (o subhito)"**. Ejemplo: *"Sigamos con H3.B"*. Eso me dispara a leer:
+   - `docs/SPRINT.md` (sección del hito)
+   - Memoria operacional del estado (ver [[project-h3a-state-and-h3b-plan]] cuando exista)
+   - `git log -5` para confirmar el último commit
+   - Cualquier memoria referenciada por las anteriores
+3. Si querés que use comportamiento distinto al default ("revisar primero", "no editar nada hasta acordar"), decilo explícito al inicio.
+4. Si una memoria contradice el código actual, **el código gana** — yo actualizo la memoria al detectarlo.

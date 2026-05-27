@@ -4,6 +4,8 @@ import type { ChannelMessage } from '../core/types/ChannelMessage.js';
 import { type CrmContext, EMPTY_CRM_CONTEXT } from '../core/types/CrmContext.js';
 import type { Identity } from '../core/types/Identity.js';
 import type { Outcome } from '../core/types/Outcome.js';
+import type { ButtonShortcut } from './supervisor/buttonShortcut.js';
+import type { ToolName } from './supervisor/filterTools.js';
 
 /**
  * Current turn's input. Set once by the pre-graph adapter before
@@ -14,11 +16,24 @@ export interface GraphInput {
   receivedAt: string;
 }
 
+export type MessageType = 'greeting' | 'farewell' | 'oos' | 'action' | 'query';
+export type Intent = 'schedule' | 'reschedule' | 'cancel' | 'confirm' | 'unknown';
+
 export interface RoutingState {
   /** Which subgraph is currently active (set by supervisor on the way in). */
   activeSubgraph?: string;
   /** Reason the supervisor abdicated the active subgraph mid-flow. */
   handoff?: string;
+  /** Resultado del classifier LLM o `null` si el atajo button bypaseó al classifier. */
+  messageType?: MessageType;
+  /** Sub-clasificación dentro de `messageType='action'`. */
+  intent?: Intent;
+  /** Confidence del classifier (0-1). */
+  confidence?: number;
+  /** Atajo determinístico — el supervisor lo detectó al inicio del turno. */
+  buttonShortcut?: ButtonShortcut;
+  /** Tool atómica detectada por heurística post-classifier. */
+  targetTool?: ToolName;
 }
 
 export const MAX_RECENT_MESSAGES = 20;

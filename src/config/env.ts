@@ -62,6 +62,19 @@ const envSchema = z.object({
   CHECKPOINTER_TTL_SECONDS: z.coerce.number().int().positive().default(86_400), // 24h
   /** Frecuencia del job que borra checkpoints viejos para no inflar la tabla. */
   CHECKPOINTER_CLEANUP_INTERVAL_SECONDS: z.coerce.number().int().positive().default(3_600),
+
+  // Anthropic — LLMs del supervisor + tools. Único wrapper en
+  // `src/infrastructure/llm/AnthropicProvider.ts` (§9.2 REGLAS).
+  ANTHROPIC_API_KEY: z
+    .string()
+    .min(1)
+    .refine((v) => v.startsWith('sk-ant-') || v.startsWith('test-'), {
+      message: 'ANTHROPIC_API_KEY must start with "sk-ant-" (or "test-" in test env)',
+    }),
+  /** Clasificador de intent + fast-path social. Default Haiku 4.5. */
+  SUPERVISOR_MODEL: z.string().default('claude-haiku-4-5-20251001'),
+  /** Generación de respuestas conversacionales (social + tools). Default Haiku 4.5. */
+  RESPONSE_MODEL: z.string().default('claude-haiku-4-5-20251001'),
 });
 
 export type Env = z.infer<typeof envSchema>;

@@ -1,0 +1,167 @@
+import type Anthropic from '@anthropic-ai/sdk';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { Logger } from 'winston';
+import type { ChannelMessage } from '../../../../src/core/types/ChannelMessage.js';
+import { EMPTY_CRM_CONTEXT } from '../../../../src/core/types/CrmContext.js';
+import type { Identity } from '../../../../src/core/types/Identity.js';
+import type { GraphState } from '../../../../src/graph/state.js';
+import { makeClassifyIntentNode } from '../../../../src/graph/supervisor/classifyIntent.js';
+import {
+  type AnthropicMessagesLike,
+  AnthropicProvider,
+} from '../../../../src/infrastructure/llm/AnthropicProvider.js';
+
+const mockLogger = {
+  warn: vi.fn(),
+  error: vi.fn(),
+  info: vi.fn(),
+  debug: vi.fn(),
+} as unknown as Logger;
+
+function makeStubMessage(text: string): Anthropic.Messages.Message {
+  return {
+    id: 'msg',
+    type: 'message',
+    role: 'assistant',
+    model: 'claude-haiku-4-5-20251001',
+    content: [{ type: 'text', text, citations: null }] as Anthropic.Messages.ContentBlock[],
+    stop_reason: 'end_turn',
+    stop_sequence: null,
+    usage: {
+      input_tokens: 5,
+      output_tokens: 10,
+      cache_creation_input_tokens: null,
+      cache_read_input_tokens: null,
+      server_tool_use: null,
+      service_tier: null,
+    } as Anthropic.Messages.Usage,
+    container: null,
+  } as Anthropic.Messages.Message;
+}
+
+function makeProvider(text: string): AnthropicProvider {
+  const client: AnthropicMessagesLike = { create: vi.fn(async () => makeStubMessage(text)) };
+  return new AnthropicProvider({ apiKey: 'test-anthropic-key', logger: mockLogger, client });
+}
+
+const IDENTITY: Identity = {
+  tenantUuid: 'biz-1',
+  tenantAlliaId: 'allia-1',
+  profileUuid: 'p-1',
+  profileType: 'client',
+  platformId: 1,
+  channel: 'whatsapp',
+  timezone: 'America/Argentina/Buenos_Aires',
+};
+
+function makeState(contentText: string): GraphState {
+  const message: ChannelMessage = {
+    channelType: 'whatsapp',
+    channelId: '5491100',
+    messageId: 'wamid.1',
+    contentText,
+    receivedAt: new Date().toISOString(),
+    whatsappChannel: 'client',
+    phoneNumberId: 'pn-1',
+    interactivePayload: null,
+  };
+  return {
+    messages: [],
+    input: { channelMessage: message, receivedAt: message.receivedAt },
+    identity: IDENTITY,
+    crmContext: EMPTY_CRM_CONTEXT,
+    routing: {},
+    subgraphState: null,
+    outcome: null,
+  };
+}
+
+afterEach(() => vi.clearAllMocks());
+
+describe('classifyIntent node', () => {
+  it('parses greeting JSON happy path', async () => {
+    const llm = makeProvider('{"messageType":"greeting","confidence":0.95}');
+    const node = makeClassifyIntentNode({ llm, logger: mockLogger });
+    const update = await node(makeState('hola buenas'));
+    expect(update.routing).toEqual({
+      messageType: 'greeting',
+      confidence: 0.95,
+    });
+  });
+
+  it('parses action with intent', async () => {
+    const llm = makeProvider('{"messageType":"action","intent":"schedule","confidence":0.85}');
+    const node = makeClassifyIntentNode({ llm, logger: mockLogger });
+    const update = await node(makeState('quiero agendar para mañana'));
+    expect(update.routing).toEqual({
+      messageType: 'action',
+      intent: 'schedule',
+      confidence: 0.85,
+    });
+  });
+
+  it('parses JSON embedded in markdown fence', async () => {
+    const llm = makeProvider('```json\n{"messageType":"farewell","confidence":0.9}\n```');
+    const node = makeClassifyIntentNode({ llm, logger: mockLogger });
+    const update = await node(makeState('chau'));
+    expect(update.routing?.messageType).toBe('farewell');
+  });
+
+  it('fails open to action/unknown/0.3 when LLM returns prose', async () => {
+    const llm = makeProvider('I am happy to help!');
+    const node = makeClassifyIntentNode({ llm, logger: mockLogger });
+    const update = await node(makeState('algo raro'));
+    expect(update.routing).toEqual({
+      messageType: 'action',
+      intent: 'unknown',
+      confidence: 0.3,
+    });
+  });
+
+  it('fails open when LLM throws (provider returns blank output)', async () => {
+    const client: AnthropicMessagesLike = {
+      create: vi.fn(async () => {
+        throw new Error('boom');
+      }),
+    };
+    const llm = new AnthropicProvider({ apiKey: 'test-anthropic-key', logger: mockLogger, client });
+    const node = makeClassifyIntentNode({ llm, logger: mockLogger });
+    const update = await node(makeState('hola'));
+    expect(update.routing?.messageType).toBe('action');
+    expect(update.routing?.intent).toBe('unknown');
+  });
+
+  it('normalizes invalid messageType to action/unknown', async () => {
+    const llm = makeProvider('{"messageType":"flirty","confidence":0.4}');
+    const node = makeClassifyIntentNode({ llm, logger: mockLogger });
+    const update = await node(makeState('hola'));
+    expect(update.routing?.messageType).toBe('action');
+    expect(update.routing?.intent).toBe('unknown');
+  });
+
+  it('clamps confidence to [0,1]', async () => {
+    const llm = makeProvider('{"messageType":"query","confidence":1.5}');
+    const node = makeClassifyIntentNode({ llm, logger: mockLogger });
+    const update = await node(makeState('cuánto cuesta'));
+    expect(update.routing?.confidence).toBe(1);
+  });
+
+  it('drops intent when messageType is not action', async () => {
+    const llm = makeProvider('{"messageType":"greeting","intent":"schedule","confidence":0.9}');
+    const node = makeClassifyIntentNode({ llm, logger: mockLogger });
+    const update = await node(makeState('hola'));
+    expect(update.routing?.messageType).toBe('greeting');
+    expect(update.routing?.intent).toBeUndefined();
+  });
+
+  it('returns fail-open without calling LLM when input is empty', async () => {
+    const create = vi.fn(async () => makeStubMessage('unused'));
+    const client: AnthropicMessagesLike = { create };
+    const llm = new AnthropicProvider({ apiKey: 'test-anthropic-key', logger: mockLogger, client });
+    const node = makeClassifyIntentNode({ llm, logger: mockLogger });
+    const update = await node(makeState('   '));
+    expect(create).not.toHaveBeenCalled();
+    expect(update.routing?.messageType).toBe('action');
+    expect(update.routing?.intent).toBe('unknown');
+  });
+});

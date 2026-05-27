@@ -150,6 +150,9 @@ export class Pipeline implements MessageProcessor {
       platformId,
       channel: message.channelType,
       timezone: identity.userTimezone,
+      ...(identity.businessStaffRoles?.business_name
+        ? { tenantName: identity.businessStaffRoles.business_name }
+        : {}),
       ...(identity.businessStaffRoles?.role_id
         ? { roleId: identity.businessStaffRoles.role_id }
         : {}),
