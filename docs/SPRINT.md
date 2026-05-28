@@ -16,8 +16,8 @@
 | 3 | Grafo base + supervisor + tools atómicas | — | "quiero el link" → URL Manzanillo |
 | 4 | **Subgrafo schedule** (validador del diseño) | **P1 idealmente listo** | turno agendado end-to-end con todas las ramas |
 | 5 | Subgrafos confirm + cancel | P1 | confirmar + cancelar end-to-end |
-| 6 | Subgrafo reschedule | **P3 requerido** | reagendar end-to-end |
-| 7 | Subgrafo query (text-to-data) | — | "cuánto cuesta corte" responde |
+| 6 | Subgrafo reschedule | ~~P3~~ legacy `validate_reschedule_slot` ✅ | reagendar end-to-end |
+| 7 | Subgrafo query (4 intents fijos, sin freeform) | — | "cuánto cuesta corte" responde ✅ |
 | 8 | Persistencia turnos + cutover | **P2 requerido** | 1 negocio piloto sin regresiones |
 
 ```
@@ -172,35 +172,90 @@ Isladeplata team: [H0][H1][H2][H3][———— H4 ————][H5][H6][H7][—
 
 ## Hito 6 — Subgrafo `reschedule`
 
-**Bloqueo**: P3 (validate genérico para reschedule) desplegado en Guacuco.
+**Bloqueo (corregido)**: ~~P3~~. Investigación durante H6.0 confirmó que Guacuco
+ya expone `validate_reschedule_slot` (tool handler invocado via
+`POST /api/v1/tools/execute`) que deriva staff+services del `appointment_uuid`.
+La spec P3 quedó **descartada** — proponía infraestructura `/tools/validate`
+genérica que NUNCA existió en Guacuco.
+
+**Hallazgo lateral resuelto**: el subgrafo H4 (schedule) apuntaba al mismo
+endpoint fantasma `/tools/validate`. Refactorizado en H6.0 para usar
+`check_availability` (Mode A) — único path real en Guacuco. Tests + tipos
+actualizados.
 
 **Objetivo**: validar que `schedule` y `reschedule` comparten ~80% del grafo.
 
 **Entregables**:
-- `src/graph/subgraphs/reschedule/` reusando nodos de `schedule` (`resolve_entities`, `validate_availability`, `present_options`, `gate_confirm`).
-- State extiende con `appointment_uuid` (referencia al turno existente), `new_date`, `new_time`.
-- `validate_availability` pasa `appointment_uuid` en context (excluye el slot propio en Guacuco).
-- Bootstrap: "cambiar el de mañana" + un solo upcoming → pre-fill `appointment_uuid`.
+- `src/graph/subgraphs/reschedule/` con state + reducer + 8 nodos
+  (bootstrap, askSlot, validate, present, buildConfirm, gate, commit, success).
+- State con 3 slots: `appointmentUuid`, `newDate`, `newTime`. Sin staff/services.
+- `validate_availability` llama legacy `validate_reschedule_slot` con
+  `{appointment_uuid, profile_uuid, date_hint, time_hint}`. Guacuco deriva
+  staff/services + excluye el slot propio del cálculo.
+- Bootstrap: 0 upcomings → response amable; 1 → pre-fill apt; 2+ → ask cuál.
 
-**DoD**: usuario reagenda turno via WhatsApp con sugerencias si hay conflicto. Test de "reagendar a la misma hora del propio appointment" → válido.
+**DoD**: 7 E2E tests críticos en `tests/unit/graph/subgraphs/reschedule.e2e.test.ts`
+(0 upcomings, 1 upcoming exact, N upcomings, present_options, race recovery,
+gate cancel, APPOINTMENT_NOT_FOUND). 47 tests reschedule + 7 E2E = 54 nuevos.
+Total suite: 451 verdes.
 
 ---
 
-## Hito 7 — Subgrafo `query` (text-to-data)
+## Hito 7 — Subgrafo `query` (intents fijos)
 
-**Objetivo**: queries informativas (precio, horarios, próximos turnos) funcionan.
+**Scope final (corregido 2 veces)**: 4 intents fijos + freeform_sql + cannot_answer.
+
+**Iter 1 (H7.1-H7.4)**: scope-out freeform por error de mi parte. Asumí que la
+infra Guacuco no existía sin verificar IDP_OV1.
+
+**Iter 2 (H7.5)**: usuario apuntó al port existente en IDP_OV1
+(`QueryEngine + SqlValidator + QuerySchemaResolver + QueryResultTruncator + QueryResultFormatter`).
+Confirmado que Guacuco SÍ expone `/api/v1/query-processor/{tables,tables/:name/schema,query}`.
+Freeform_sql implementado portando IDP_OV1 sin QueryJudge ni drill-down retry (iter 2 futuro).
+
+**Intents implementados**:
+- `service_prices` — lookup `state.catalog.services[].price`. Sin call extra.
+- `service_list` — lookup catalog. Sin call extra.
+- `my_upcoming` — lookup `state.crmContext.upcomingAppointments`. Sin call extra.
+- `staff_schedule_day` — call `executeTool('get_staff_appointments_summary', ...)`.
+  Role-aware: solo staff; client → cannot_answer en classifier.
+- `freeform_sql` (H7.5) — text-to-SQL completo. LLM Haiku genera SQL contra
+  schema dinámico cargado de Guacuco. 5 capas de validación local + Guacuco
+  enforces server-side. 1 retry on execute error con contexto del error.
+  Truncación de resultados antes de sintetizar. Fallback determinístico
+  `formatRowsAsDetails` cuando LLM falla. Schema cache 1h por (profileType:roleId).
+- `cannot_answer` — preguntas off-topic o no encajan, respuesta amable LLM Haiku.
+
+**Out of scope v1** (queda para iter 2 futuro):
+- `QueryJudge` — LLM extra que valida SQL+síntesis post-ejecución, fuerza retry
+  con critique. Aumenta calidad pero duplica costo LLM. Recomendable cuando
+  el subgrafo vaya a producción directo sin piloto humano-supervisado.
+- Drill-down retry — detección de imperativos cortos ("dame detalles", "con quien")
+  que heredan WHERE+rango de la consulta previa. Requiere historial conversacional.
+- Anáforas (6 turnos de history en el prompt para resolver "y la próxima?").
+- `business_hours` tool dedicada en Guacuco — workaround: cae en freeform_sql
+  o cannot_answer.
+- Cache Redis multi-instancia — schemaCache actual es in-process. OK para v1
+  single-instance.
 
 **Entregables**:
-- `src/graph/subgraphs/query/` con dos nodos LLM:
-  - `generate_sql` (Sonnet) sobre schema dinámico cargado en state
-  - `synthesize_answer` (Haiku) que toma resultado y formula respuesta
-- Cap de costo / timeout por query.
-- Tests con queries comunes:
-  - "cuánto cuesta un corte" (cliente)
-  - "qué horarios tengo el viernes" (staff)
-  - "qué servicios ofrecen" (cliente)
+- `src/graph/subgraphs/query/` con state + reducer + 3 nodos
+  (classify_query Haiku, fetch_intent dispatch, synthesize_response Haiku).
+- `GuacucoClient.getStaffAppointmentsSummary(params, {profileUuid, businessUuid})`.
+- Tipos: `QueryDraftState`, `QueryIntent`, `GetStaffAppointmentsSummaryResult`.
+- Defensa-en-profundidad: classifier rebaja staff_schedule_day a cannot_answer
+  si rol=client; fetch_intent valida idem.
+- **H7.5 freeform_sql**: `GuacucoClient.{getQueryTables, getQueryTableSchema, executeQuery}`
+  + tipos `QueryProcessor{Tables,Schema,Execute}Response`. Helpers en
+  `src/graph/subgraphs/query/`: `sqlValidator.ts` (5 capas), `schemaResolver.ts`
+  (4 schemas por rol), `resultTruncator.ts` (cap 50k chars), `resultFormatter.ts`
+  (fallback determinístico). Prompt `prompts/querySql.ts` (port simplificado
+  IDP_OV1 sin drill-down/anáforas).
 
-**DoD**: las 3 queries anteriores responden correctamente. Query sin match en schema → respuesta amable de "no puedo responder eso".
+**DoD**: 10 E2E tests verdes en `tests/unit/graph/subgraphs/query.e2e.test.ts`
+(intents fijos + 4 nuevos para freeform_sql: happy staff, DROP unsafe, client
+schema, execute retry-and-fail). 82 tests unit del subgrafo query (state +
+classify + fetch + synthesize + helpers + freeform). Total suite: 544 verdes.
 
 ---
 

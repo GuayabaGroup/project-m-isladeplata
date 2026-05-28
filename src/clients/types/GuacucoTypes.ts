@@ -92,46 +92,12 @@ export interface ToolExecuteResponse<R = unknown> {
 }
 
 // ============================================================================
-// Tool validate — POST /api/v1/tools/validate
-// ============================================================================
-
-export interface ToolValidateRequestParam {
-  name: string;
-  value: string;
-}
-
-export interface ToolValidateRequest {
-  tool_name: string;
-  parameters: ToolValidateRequestParam[];
-  context?: Record<string, unknown>;
-}
-
-export interface ToolValidateResultItem {
-  name: string;
-  valid: boolean;
-  message: string | null;
-}
-
-export interface ToolValidateSuggestions {
-  /** schedule_appointment validate */
-  date?: string[];
-  appointment_time?: string[];
-  /** reschedule_appointment validate (P3) */
-  new_date?: string[];
-  new_time?: string[];
-  /** Combined when both params fail simultaneously, format `YYYY-MM-DD HH:mm`. */
-  combined?: string[];
-}
-
-export interface ToolValidateResult {
-  valid: boolean;
-  results: ToolValidateResultItem[];
-  suggestions?: ToolValidateSuggestions;
-}
-
-// ============================================================================
 // Per-tool params + results
 // ============================================================================
+
+// validate_reschedule_slot (legacy tool handler, invocado via executeTool).
+// Schedule NO tiene un validate dedicado; se usa check_availability Mode A.
+// get_staff_appointments_summary (read-only, solo staff): ver tipos al final.
 
 // schedule_appointment
 
@@ -188,6 +154,112 @@ export interface RescheduleAppointmentParams {
 }
 
 export type RescheduleAppointmentResult = ScheduleAppointmentResult;
+
+// validate_reschedule_slot (read-only pre-check, derives staff+services del appointment).
+
+export interface ValidateRescheduleSlotParams {
+  appointment_uuid: string;
+  /** client UUID (Guacuco lo usa para validar ownership del turno). */
+  profile_uuid: string;
+  /** Fechas YYYY-MM-DD que el usuario quiere probar. Mandamos 1 (la del usuario). */
+  date_hint: string[];
+  /** 'morning'|'afternoon'|'evening' o 'HH:mm'. Mandamos HH:mm exacto. */
+  time_hint: string;
+}
+
+export interface ValidateRescheduleProposedSlot {
+  date: string;
+  time: string;
+}
+
+export type ValidateRescheduleFallback =
+  | { kind: 'text'; message: string }
+  | {
+      kind: 'selection_list';
+      slot_name: string;
+      header: string;
+      button_text: string;
+      options: Array<{ id: string; title: string; description: string }>;
+    };
+
+export interface ValidateRescheduleSlotResult {
+  /** true sólo si exact match al date+time pedido. false en todo el resto. */
+  passed: boolean;
+  /** Si passed=true: 1 slot (el exacto). Si passed=false con alternatives: hasta 10 slots. */
+  proposed_slots: ValidateRescheduleProposedSlot[];
+  appointment_uuid: string;
+  service_duration_minutes: number;
+  /** Solo presente cuando passed=false. */
+  fallback?: ValidateRescheduleFallback;
+}
+
+// get_staff_appointments_summary (solo staff). Guacuco valida ownership con
+// context.profileUuid + context.businessUuid; el cliente los pasa via
+// `options.context`.
+
+export interface GetStaffAppointmentsSummaryParams {
+  date_start: string; // YYYY-MM-DD
+  date_end?: string; // si omitido, Guacuco usa date_start (1 día)
+}
+
+export interface StaffSummaryAppointmentService {
+  service_name: string;
+  staff_name: string;
+}
+
+export interface StaffSummaryAppointment {
+  appointment_uuid: string;
+  appointment_date: string;
+  start_time: string;
+  end_time: string;
+  status: number;
+  client_name: string | null;
+  services: StaffSummaryAppointmentService[];
+}
+
+export interface GetStaffAppointmentsSummaryResult {
+  response_type: 'text';
+  message: string;
+  /** Texto pre-formateado por Guacuco (StaffAppointmentsSummaryFormatter). */
+  summary: string;
+  total: number;
+  date_start: string;
+  date_end: string;
+  appointments: StaffSummaryAppointment[];
+}
+
+// ============================================================================
+// Query Processor — text-to-SQL endpoints (read-only). Ports IDP_OV1 contract.
+// GET /api/v1/query-processor/tables?profile_type=...&role_id=...
+// GET /api/v1/query-processor/tables/:tableName/schema?profile_type=...&role_id=...
+// POST /api/v1/query-processor/query  {sql, profile_type, role_id?, timeout?}
+// ============================================================================
+
+/** `table_name` viene en formato "schema.table" (ej. `front_sche_client.services`). */
+export type QueryProcessorTablesResponse = Array<{
+  table_name: string;
+  table_comment: string | null;
+  columns: Array<{ column_name: string; column_comment: string | null }>;
+}>;
+
+export interface QueryProcessorSchemaResponse {
+  columns: Array<{
+    column_name: string;
+    data_type: string;
+    is_nullable: string;
+    column_comment: string | null;
+  }>;
+  foreignKeys: Array<{
+    column_name: string;
+    foreign_table_name: string;
+    foreign_column_name: string;
+  }>;
+}
+
+export interface QueryProcessorExecuteResponse {
+  rows: Record<string, unknown>[];
+  rowCount: number;
+}
 
 // confirm_appointment
 

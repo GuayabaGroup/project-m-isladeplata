@@ -12,8 +12,8 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Logger } from 'winston';
 import type { GuacucoClient } from '../../../../../src/clients/GuacucoClient.js';
 import type {
+  CheckAvailabilityResult,
   ScheduleAppointmentResult,
-  ToolValidateResult,
 } from '../../../../../src/clients/types/GuacucoTypes.js';
 import { ToolExecutionError } from '../../../../../src/core/errors/ToolExecutionError.js';
 import type { CatalogState } from '../../../../../src/core/types/Catalog.js';
@@ -145,21 +145,36 @@ function makeSeqLlm(replies: string[]): {
 }
 
 function makeGuacuco(opts: {
-  validate?: (input: unknown) => Promise<ToolValidateResult>;
+  validate?: (input: unknown) => Promise<CheckAvailabilityResult>;
   schedule?: (input: unknown, opts?: unknown) => Promise<ScheduleAppointmentResult>;
 }): {
   guacuco: GuacucoClient;
   calls: { validate: ReturnType<typeof vi.fn>; schedule: ReturnType<typeof vi.fn> };
 } {
-  const validate = vi.fn(opts.validate ?? (async () => ({ valid: true, results: [] })));
+  const validate = vi.fn(opts.validate ?? defaultAvailableResult);
   const schedule = vi.fn(opts.schedule ?? defaultScheduleSuccess);
   return {
     guacuco: {
-      validateScheduleSlot: validate,
+      checkAvailability: validate,
       scheduleAppointment: schedule,
     } as unknown as GuacucoClient,
     calls: { validate, schedule },
   };
+}
+
+function defaultAvailableResult(): Promise<CheckAvailabilityResult> {
+  return Promise.resolve({
+    response_type: 'text',
+    message: 'OK',
+    available: true,
+    date: '2026-05-28',
+    start_time: '16:00',
+    end_time: '17:00',
+    staff_uuid: 'stf-maria',
+    service_uuids: ['svc-corte'],
+    total_duration_minutes: 60,
+    suggestions: { schedule_appointment: [] },
+  });
 }
 
 function defaultScheduleSuccess(): Promise<ScheduleAppointmentResult> {
@@ -341,9 +356,27 @@ describe('schedule E2E #3: slot no disponible → present_options → user picks
     ]);
     const { guacuco, calls } = makeGuacuco({
       validate: async () => ({
-        valid: false,
-        results: [],
-        suggestions: { combined: ['2026-05-28 17:00', '2026-05-28 18:00'] },
+        response_type: 'text',
+        message: 'busy',
+        available: false,
+        suggestions: {
+          schedule_appointment: [
+            {
+              service_uuids: ['svc-corte'],
+              staff_uuid: 'stf-maria',
+              date: '2026-05-28',
+              appointment_time: '17:00',
+              label: '28 mayo - 17:00',
+            },
+            {
+              service_uuids: ['svc-corte'],
+              staff_uuid: 'stf-maria',
+              date: '2026-05-28',
+              appointment_time: '18:00',
+              label: '28 mayo - 18:00',
+            },
+          ],
+        },
       }),
     });
     const graph = compileGraph({
@@ -402,11 +435,22 @@ describe('schedule E2E #4: race en commit (STAFF_NOT_AVAILABLE) → recovery', (
       validate: async () => {
         validateCallCount++;
         // Primer validate: exact match. Segundo (post-race): sugiere opciones.
-        if (validateCallCount === 1) return { valid: true, results: [] };
+        if (validateCallCount === 1) return defaultAvailableResult();
         return {
-          valid: false,
-          results: [],
-          suggestions: { combined: ['2026-05-28 17:00'] },
+          response_type: 'text',
+          message: 'busy',
+          available: false,
+          suggestions: {
+            schedule_appointment: [
+              {
+                service_uuids: ['svc-corte'],
+                staff_uuid: 'stf-maria',
+                date: '2026-05-28',
+                appointment_time: '17:00',
+                label: '28 mayo - 17:00',
+              },
+            ],
+          },
         };
       },
       schedule: async () => {

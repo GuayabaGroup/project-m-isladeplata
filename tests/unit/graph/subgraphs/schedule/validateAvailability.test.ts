@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Logger } from 'winston';
 import type { GuacucoClient } from '../../../../../src/clients/GuacucoClient.js';
-import type { ToolValidateResult } from '../../../../../src/clients/types/GuacucoTypes.js';
+import type { CheckAvailabilityResult } from '../../../../../src/clients/types/GuacucoTypes.js';
 import type { Identity } from '../../../../../src/core/types/Identity.js';
 import { makeValidateAvailabilityNode } from '../../../../../src/graph/subgraphs/schedule/nodes/validateAvailability.js';
 import {
@@ -35,15 +35,30 @@ function makeReadyDraft(): AppointmentDraftState {
   return d;
 }
 
-function makeGuacuco(impl: (input: unknown) => Promise<ToolValidateResult>): GuacucoClient {
-  return { validateScheduleSlot: impl } as unknown as GuacucoClient;
+function makeGuacuco(impl: (input: unknown) => Promise<CheckAvailabilityResult>): GuacucoClient {
+  return { checkAvailability: impl } as unknown as GuacucoClient;
+}
+
+function availableResult(): CheckAvailabilityResult {
+  return {
+    response_type: 'text',
+    message: 'OK',
+    available: true,
+    date: '2026-05-28',
+    start_time: '16:00',
+    end_time: '17:00',
+    staff_uuid: 'stf-maria',
+    service_uuids: ['svc-corte'],
+    total_duration_minutes: 60,
+    suggestions: { schedule_appointment: [] },
+  };
 }
 
 afterEach(() => vi.clearAllMocks());
 
 describe('validateAvailability — happy path', () => {
-  it('on valid=true: marks exactMatch=true, no proposedSlots, phase awaiting_confirmation', async () => {
-    const guacuco = makeGuacuco(async () => ({ valid: true, results: [] }));
+  it('on available=true: marks exactMatch=true, no proposedSlots, phase awaiting_confirmation', async () => {
+    const guacuco = makeGuacuco(async () => availableResult());
     const node = makeValidateAvailabilityNode({ guacuco, logger: mockLogger });
 
     const update = await node({ identity: IDENTITY, subgraphState: makeReadyDraft() });
@@ -58,36 +73,53 @@ describe('validateAvailability — happy path', () => {
     });
   });
 
-  it('passes correct params to guacuco.validateScheduleSlot', async () => {
-    const fn = vi.fn(async () => ({ valid: true, results: [] }) as ToolValidateResult);
+  it('passes correct params to guacuco.checkAvailability (Mode A)', async () => {
+    const fn = vi.fn(async () => availableResult());
     const guacuco = makeGuacuco(fn);
     const node = makeValidateAvailabilityNode({ guacuco, logger: mockLogger });
 
     await node({ identity: IDENTITY, subgraphState: makeReadyDraft() });
     expect(fn).toHaveBeenCalledWith({
-      date: '2026-05-28',
-      appointment_time: '16:00',
       business_allia_id: 'allia-1',
       staff_uuid: 'stf-maria',
       service_uuids: ['svc-corte'],
+      date: '2026-05-28',
+      appointment_time: '16:00',
     });
   });
 });
 
 describe('validateAvailability — no match with suggestions', () => {
-  it('populates proposedSlots from suggestions.combined', async () => {
+  it('populates proposedSlots from suggestions.schedule_appointment', async () => {
     const guacuco = makeGuacuco(async () => ({
-      valid: false,
-      results: [],
+      response_type: 'text',
+      message: 'busy',
+      available: false,
+      reason: 'STAFF_NOT_AVAILABLE',
       suggestions: {
-        combined: ['2026-05-28 17:00', '2026-05-28 18:00', '2026-05-29 10:00'],
+        schedule_appointment: [
+          {
+            service_uuids: ['svc-corte'],
+            staff_uuid: 'stf-maria',
+            date: '2026-05-28',
+            appointment_time: '17:00',
+            label: '28 mayo - 17:00',
+          },
+          {
+            service_uuids: ['svc-corte'],
+            staff_uuid: 'stf-maria',
+            date: '2026-05-29',
+            appointment_time: '10:00',
+            label: '29 mayo - 10:00',
+          },
+        ],
       },
     }));
     const node = makeValidateAvailabilityNode({ guacuco, logger: mockLogger });
 
     const update = await node({ identity: IDENTITY, subgraphState: makeReadyDraft() });
     expect(update.availability?.exactMatch).toBe(false);
-    expect(update.availability?.proposedSlots).toHaveLength(3);
+    expect(update.availability?.proposedSlots).toHaveLength(2);
     expect(update.availability?.proposedSlots[0]).toEqual({
       date: '2026-05-28',
       time: '17:00',
@@ -96,11 +128,22 @@ describe('validateAvailability — no match with suggestions', () => {
     expect(update.phase).toBe('awaiting_pick');
   });
 
-  it('handles ISO format with T separator in combined', async () => {
+  it('falls back to formatLabel when suggestion.label is empty', async () => {
     const guacuco = makeGuacuco(async () => ({
-      valid: false,
-      results: [],
-      suggestions: { combined: ['2026-06-01T09:30'] },
+      response_type: 'text',
+      message: 'busy',
+      available: false,
+      suggestions: {
+        schedule_appointment: [
+          {
+            service_uuids: ['svc-corte'],
+            staff_uuid: 'stf-maria',
+            date: '2026-06-01',
+            appointment_time: '09:30',
+            label: '',
+          },
+        ],
+      },
     }));
     const node = makeValidateAvailabilityNode({ guacuco, logger: mockLogger });
     const update = await node({ identity: IDENTITY, subgraphState: makeReadyDraft() });
@@ -111,32 +154,47 @@ describe('validateAvailability — no match with suggestions', () => {
     });
   });
 
-  it('falls back to date[] only suggestions (keeps original time)', async () => {
+  it('dedupes duplicate date+time suggestions', async () => {
     const guacuco = makeGuacuco(async () => ({
-      valid: false,
-      results: [],
-      suggestions: { date: ['2026-06-01', '2026-06-02'] },
-    }));
-    const node = makeValidateAvailabilityNode({ guacuco, logger: mockLogger });
-    const update = await node({ identity: IDENTITY, subgraphState: makeReadyDraft() });
-    expect(update.availability?.proposedSlots).toEqual([
-      { date: '2026-06-01', time: '16:00', label: '1 junio - 16:00' },
-      { date: '2026-06-02', time: '16:00', label: '2 junio - 16:00' },
-    ]);
-  });
-
-  it('dedupes duplicates across combined + date + time arrays', async () => {
-    const guacuco = makeGuacuco(async () => ({
-      valid: false,
-      results: [],
+      response_type: 'text',
+      message: 'busy',
+      available: false,
       suggestions: {
-        combined: ['2026-05-28 17:00'],
-        appointment_time: ['17:00'], // same date+time → dedup
+        schedule_appointment: [
+          {
+            service_uuids: ['svc-corte'],
+            staff_uuid: 'stf-maria',
+            date: '2026-05-28',
+            appointment_time: '17:00',
+            label: '28 mayo - 17:00',
+          },
+          {
+            service_uuids: ['svc-corte'],
+            staff_uuid: 'stf-maria',
+            date: '2026-05-28',
+            appointment_time: '17:00',
+            label: '28 mayo - 17:00 (dup)',
+          },
+        ],
       },
     }));
     const node = makeValidateAvailabilityNode({ guacuco, logger: mockLogger });
     const update = await node({ identity: IDENTITY, subgraphState: makeReadyDraft() });
     expect(update.availability?.proposedSlots).toHaveLength(1);
+  });
+
+  it('handles empty suggestions list', async () => {
+    const guacuco = makeGuacuco(async () => ({
+      response_type: 'text',
+      message: 'busy',
+      available: false,
+      suggestions: { schedule_appointment: [] },
+    }));
+    const node = makeValidateAvailabilityNode({ guacuco, logger: mockLogger });
+    const update = await node({ identity: IDENTITY, subgraphState: makeReadyDraft() });
+    expect(update.availability?.exactMatch).toBe(false);
+    expect(update.availability?.proposedSlots).toEqual([]);
+    expect(update.phase).toBe('awaiting_pick');
   });
 });
 

@@ -1,13 +1,17 @@
 import type { Logger } from 'winston';
 import type { GuacucoClient } from '../../../../clients/GuacucoClient.js';
-import type { ToolValidateResult } from '../../../../clients/types/GuacucoTypes.js';
+import type {
+  AvailabilitySuggestion,
+  CheckAvailabilityResult,
+} from '../../../../clients/types/GuacucoTypes.js';
 import type { Identity } from '../../../../core/types/Identity.js';
 import type { Outcome } from '../../../../core/types/Outcome.js';
 import type { AppointmentDraftState, AvailabilityCache } from '../state.js';
 
 /**
- * Llama `guacuco.validateScheduleSlot(...)` y popula `availability` en el
- * subgraph state.
+ * Pre-valida el slot pedido por el usuario via `check_availability` Mode A
+ * (date + time). Único path disponible en Guacuco — no existe un `/tools/validate`
+ * para schedule_appointment.
  *
  * Reglas:
  * - Si todos los slots requeridos (`services`, `staff`, `date`, `time`) están
@@ -19,6 +23,11 @@ import type { AppointmentDraftState, AvailabilityCache } from '../state.js';
  *   manejamos failures de red.
  * - `lastCheckedFor` se guarda como snapshot para que el reducer de
  *   `availability` invalide cache cuando los slots cambien (cancel_handler / mid-confirm).
+ *
+ * Mapeo respuesta:
+ * - `available: true` → exactMatch=true, sin proposed.
+ * - `available: false` → exactMatch=false, proposed desde `suggestions.schedule_appointment[]`.
+ * - `available` ausente (Mode B/C) → no debería pasar acá; defensivo: exactMatch=false.
  */
 
 export interface ValidateAvailabilityDeps {
@@ -73,14 +82,14 @@ export function makeValidateAvailabilityNode(deps: ValidateAvailabilityDeps) {
       serviceUuids: services.value,
     };
 
-    let result: ToolValidateResult;
+    let result: CheckAvailabilityResult;
     try {
-      result = await guacuco.validateScheduleSlot({
-        date: date.value,
-        appointment_time: time.value,
+      result = await guacuco.checkAvailability({
         business_allia_id: identity.tenantAlliaId,
         staff_uuid: staff.value,
         service_uuids: services.value,
+        date: date.value,
+        appointment_time: time.value,
       });
     } catch (err) {
       logger.warn('validateAvailability: Guacuco call failed', {
@@ -104,9 +113,9 @@ export function makeValidateAvailabilityNode(deps: ValidateAvailabilityDeps) {
 
 function buildAvailability(
   snapshot: NonNullable<AvailabilityCache['lastCheckedFor']>,
-  result: ToolValidateResult,
+  result: CheckAvailabilityResult,
 ): AvailabilityCache {
-  if (result.valid === true) {
+  if (result.available === true) {
     return {
       lastCheckedFor: snapshot,
       exactMatch: true,
@@ -114,7 +123,7 @@ function buildAvailability(
     };
   }
 
-  const proposed = normalizeSuggestions(result, snapshot);
+  const proposed = normalizeSuggestions(result.suggestions?.schedule_appointment);
   return {
     lastCheckedFor: snapshot,
     exactMatch: false,
@@ -122,55 +131,24 @@ function buildAvailability(
   };
 }
 
-/**
- * Convierte `suggestions` del shape Guacuco a `proposedSlots` con label
- * legible. Preferencia: `combined` (formato "YYYY-MM-DD HH:mm"). Fallback a
- * `date[]` o `appointment_time[]` aislados.
- */
 function normalizeSuggestions(
-  result: ToolValidateResult,
-  snapshot: NonNullable<AvailabilityCache['lastCheckedFor']>,
+  raw: AvailabilitySuggestion[] | undefined,
 ): AvailabilityCache['proposedSlots'] {
+  if (!Array.isArray(raw)) return [];
   const out: AvailabilityCache['proposedSlots'] = [];
   const seen = new Set<string>();
-
-  const pushIfFresh = (date: string, time: string) => {
-    const key = `${date}T${time}`;
-    if (seen.has(key)) return;
+  for (const s of raw) {
+    if (typeof s.date !== 'string' || typeof s.appointment_time !== 'string') continue;
+    const key = `${s.date}T${s.appointment_time}`;
+    if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ date, time, label: formatLabel(date, time) });
-  };
-
-  const combined = result.suggestions?.combined;
-  if (Array.isArray(combined)) {
-    for (const entry of combined) {
-      const parsed = parseCombined(entry);
-      if (parsed) pushIfFresh(parsed.date, parsed.time);
-    }
+    const label =
+      typeof s.label === 'string' && s.label.length > 0
+        ? s.label
+        : formatLabel(s.date, s.appointment_time);
+    out.push({ date: s.date, time: s.appointment_time, label });
   }
-
-  const dateOnly = result.suggestions?.date;
-  if (Array.isArray(dateOnly)) {
-    for (const d of dateOnly) {
-      if (typeof d === 'string') pushIfFresh(d, snapshot.time);
-    }
-  }
-
-  const timeOnly = result.suggestions?.appointment_time;
-  if (Array.isArray(timeOnly)) {
-    for (const t of timeOnly) {
-      if (typeof t === 'string') pushIfFresh(snapshot.date, t);
-    }
-  }
-
   return out;
-}
-
-function parseCombined(entry: string): { date: string; time: string } | null {
-  if (typeof entry !== 'string') return null;
-  const m = /^(\d{4}-\d{2}-\d{2})[\sT](\d{2}:\d{2})$/.exec(entry.trim());
-  if (!m || !m[1] || !m[2]) return null;
-  return { date: m[1], time: m[2] };
 }
 
 const SPANISH_MONTHS = [

@@ -9,6 +9,11 @@ import type {
   CheckAvailabilityResult,
   ConfirmAppointmentParams,
   ConfirmAppointmentResult,
+  GetStaffAppointmentsSummaryParams,
+  GetStaffAppointmentsSummaryResult,
+  QueryProcessorExecuteResponse,
+  QueryProcessorSchemaResponse,
+  QueryProcessorTablesResponse,
   RescheduleAppointmentParams,
   RescheduleAppointmentResult,
   ResolveIdentityInput,
@@ -17,14 +22,14 @@ import type {
   ScheduleAppointmentResult,
   ToolExecuteRequest,
   ToolExecuteResponse,
-  ToolValidateRequest,
-  ToolValidateRequestParam,
-  ToolValidateResult,
+  ValidateRescheduleSlotParams,
+  ValidateRescheduleSlotResult,
 } from './types/GuacucoTypes.js';
 
 const RESOLVE_IDENTITY_PATH = '/identity/resolve';
 const TOOL_EXECUTE_PATH = '/api/v1/tools/execute';
-const TOOL_VALIDATE_PATH = '/api/v1/tools/validate';
+const QUERY_TABLES_PATH = '/api/v1/query-processor/tables';
+const QUERY_EXECUTE_PATH = '/api/v1/query-processor/query';
 
 export interface ExecuteOptions {
   context?: Record<string, unknown>;
@@ -151,74 +156,122 @@ export class GuacucoClient extends BaseHttpClient {
    * - Mode C: no date/time → returns availability from "now" onwards
    *
    * ALWAYS returns suggestions, even when the proposed slot is available.
+   *
+   * Es el único path para pre-validar un slot de schedule_appointment —
+   * Guacuco no expone un `/tools/validate` separado; toda validación va por
+   * executeTool con el handler correspondiente.
    */
   checkAvailability(params: CheckAvailabilityParams): Promise<CheckAvailabilityResult> {
     return this.executeTool<CheckAvailabilityResult>('check_availability', { ...params });
   }
 
-  // ==========================================================================
-  // Tool validate (generic + per-tool wrappers)
-  // ==========================================================================
-
-  async validateTool(
-    toolName: string,
-    parameters: ToolValidateRequestParam[],
-    context: Record<string, unknown>,
-  ): Promise<ToolValidateResult> {
-    const body: ToolValidateRequest = {
-      tool_name: toolName,
-      parameters,
-      context,
-    };
-    const response = await this.http.post<Envelope<ToolValidateResult>>(TOOL_VALIDATE_PATH, body);
-    return this.unwrap<ToolValidateResult>(response);
-  }
-
-  validateScheduleSlot(input: {
-    date?: string;
-    appointment_time?: string;
-    business_allia_id: string;
-    staff_uuid: string;
-    service_uuids: string[];
-  }): Promise<ToolValidateResult> {
-    const params: ToolValidateRequestParam[] = [];
-    if (input.date !== undefined) params.push({ name: 'date', value: input.date });
-    if (input.appointment_time !== undefined) {
-      params.push({ name: 'appointment_time', value: input.appointment_time });
-    }
-    return this.validateTool('schedule_appointment', params, {
-      business_allia_id: input.business_allia_id,
-      staff_uuid: input.staff_uuid,
-      service_uuids: input.service_uuids,
-    });
+  /**
+   * Resumen de turnos del staff en un rango de fechas (max 31 días). Solo
+   * staff role; Guacuco valida ownership via `context.profileUuid` +
+   * `context.businessUuid` (los pasa el caller como ExecuteOptions.context).
+   *
+   * Devuelve `summary` pre-formateado por Guacuco + array de appointments
+   * sin PII de cliente más allá del nombre. Si `date_end` se omite, Guacuco
+   * usa `date_start` (1 día).
+   */
+  getStaffAppointmentsSummary(
+    params: GetStaffAppointmentsSummaryParams,
+    options: { profileUuid: string; businessUuid: string },
+  ): Promise<GetStaffAppointmentsSummaryResult> {
+    return this.executeTool<GetStaffAppointmentsSummaryResult>(
+      'get_staff_appointments_summary',
+      { ...params },
+      {
+        context: {
+          profile_uuid: options.profileUuid,
+          business_uuid: options.businessUuid,
+          profile_type: 'staff',
+        },
+      },
+    );
   }
 
   /**
-   * Validate reschedule slot. Depends on spec P3 in Guacuco (unified validate
-   * endpoint with `tool_name='reschedule_appointment'` + `appointment_uuid`
-   * in context). Until P3 lands, this method targets the new endpoint and
-   * will return validate errors if Guacuco hasn't deployed P3 yet.
+   * Pre-check del slot pedido por el usuario para reagendar. Read-only.
+   * Deriva staff/services del `appointment_uuid` (no los recibe en el input).
    *
-   * Key invariant: `appointment_uuid` in context lets Guacuco exclude the
-   * own appointment from the availability calculation (so rescheduling to
-   * the same slot is valid).
+   * Mandamos `date_hint=[oneDate]` + `time_hint='HH:mm'` para forzar el path
+   * exact-match: si pasa, `passed=true` y `proposed_slots=[{date,time}]`;
+   * si no, `passed=false` con alternativas en la ventana correspondiente.
    */
-  validateRescheduleSlot(input: {
-    new_date?: string;
-    new_time?: string;
-    business_allia_id: string;
-    staff_uuid: string;
-    service_uuids: string[];
-    appointment_uuid: string;
-  }): Promise<ToolValidateResult> {
-    const params: ToolValidateRequestParam[] = [];
-    if (input.new_date !== undefined) params.push({ name: 'new_date', value: input.new_date });
-    if (input.new_time !== undefined) params.push({ name: 'new_time', value: input.new_time });
-    return this.validateTool('reschedule_appointment', params, {
-      business_allia_id: input.business_allia_id,
-      staff_uuid: input.staff_uuid,
-      service_uuids: input.service_uuids,
-      appointment_uuid: input.appointment_uuid,
+  validateRescheduleSlot(
+    params: ValidateRescheduleSlotParams,
+  ): Promise<ValidateRescheduleSlotResult> {
+    return this.executeTool<ValidateRescheduleSlotResult>('validate_reschedule_slot', {
+      ...params,
     });
+  }
+
+  // ==========================================================================
+  // Query Processor (text-to-SQL, read-only)
+  // ==========================================================================
+
+  /**
+   * Lista tablas disponibles para el rol del consultor. Guacuco filtra por
+   * `profile_type` + `role_id` (staff requiere role_id, client lo omite).
+   * Schema name viene como `"schema.table"` en `table_name`.
+   */
+  async getQueryTables(
+    profileType: 'staff' | 'client',
+    roleId?: number,
+  ): Promise<QueryProcessorTablesResponse> {
+    const params: Record<string, string | number> = { profile_type: profileType };
+    if (roleId != null) params.role_id = roleId;
+    const response = await this.http.get<Envelope<QueryProcessorTablesResponse>>(
+      QUERY_TABLES_PATH,
+      { params },
+    );
+    return this.unwrap<QueryProcessorTablesResponse>(response);
+  }
+
+  /**
+   * Detalle de columnas (tipos, nullability, comments) + FKs de una tabla.
+   * `tableName` es el nombre corto sin schema (Guacuco lo resuelve al espacio
+   * permitido por el rol).
+   */
+  async getQueryTableSchema(
+    tableName: string,
+    profileType: 'staff' | 'client',
+    roleId?: number,
+  ): Promise<QueryProcessorSchemaResponse> {
+    const params: Record<string, string | number> = { profile_type: profileType };
+    if (roleId != null) params.role_id = roleId;
+    const path = `${QUERY_TABLES_PATH}/${encodeURIComponent(tableName)}/schema`;
+    const response = await this.http.get<Envelope<QueryProcessorSchemaResponse>>(path, {
+      params,
+    });
+    return this.unwrap<QueryProcessorSchemaResponse>(response);
+  }
+
+  /**
+   * Ejecuta SQL read-only. Guacuco enforce:
+   * - keyword blocking (DANGEROUS_KEYWORD_DETECTED)
+   * - read-only / write rejection (WRITE_OPERATION_NOT_ALLOWED)
+   * - schema isolation por rol (SCHEMA_NOT_ALLOWED)
+   * - max 5000 chars SQL
+   * - information_schema bloqueado a nivel controller
+   * - timeout configurable (default Guacuco)
+   *
+   * El caller (subgrafo query) hace validate previo local + maneja retry.
+   */
+  async executeQuery(
+    sql: string,
+    profileType: 'staff' | 'client',
+    roleId?: number,
+    timeout?: number,
+  ): Promise<QueryProcessorExecuteResponse> {
+    const body: Record<string, unknown> = { sql, profile_type: profileType };
+    if (roleId != null) body.role_id = String(roleId);
+    if (timeout != null) body.timeout = timeout;
+    const response = await this.http.post<Envelope<QueryProcessorExecuteResponse>>(
+      QUERY_EXECUTE_PATH,
+      body,
+    );
+    return this.unwrap<QueryProcessorExecuteResponse>(response);
   }
 }

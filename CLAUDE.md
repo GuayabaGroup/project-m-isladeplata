@@ -10,7 +10,7 @@ Toda auditoría de código contra ese documento. Un hallazgo de auditoría es v�
 
 ## Sprint v1
 
-[`docs/SPRINT.md`](docs/SPRINT.md) — 9 hitos H0 → H8. Specs para el equipo Guacuco (P1 idempotency, P2 persistencia turnos, P3 unificar validate) en [`docs/specs/`](docs/specs/).
+[`docs/SPRINT.md`](docs/SPRINT.md) — 9 hitos H0 → H8. Specs para el equipo Guacuco (P1 idempotency, P2 persistencia turnos) en [`docs/specs/`](docs/specs/). P3 fue descartada en H6 — Guacuco ya tenía el tool `validate_reschedule_slot` legacy que cubre el caso.
 
 ## Quick commands
 
@@ -47,8 +47,8 @@ pnpm lint:fix          # biome check --write
 - **H3 — Grafo base + supervisor + tools atómicas** ✅
 - **H4 — Subgrafo `schedule_appointment`** ✅
 - **H5 — Subgrafos `confirm` + `cancel`** ✅
-- H6 — Subgrafo `reschedule` (requiere P3)
-- H7 — Subgrafo `query`
+- **H6 — Subgrafo `reschedule`** ✅ (P3 descartada — Guacuco ya tenía el tool legacy correcto)
+- **H7 — Subgrafo `query`** ✅ (4 intents fijos + freeform_sql via port de IDP_OV1; sin QueryJudge ni drill-down iter 1)
 - H8 — Persistencia turnos (P2) + cutover
 
 Actualizar este checklist a medida que se completen hitos.

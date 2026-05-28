@@ -7,6 +7,8 @@
 
 import { cancelSubgraphReducer } from './cancel/reducer.js';
 import { confirmSubgraphReducer } from './confirm/reducer.js';
+import { querySubgraphReducer } from './query/reducer.js';
+import { rescheduleSubgraphReducer } from './reschedule/reducer.js';
 import { scheduleSubgraphReducer } from './schedule/reducer.js';
 
 interface KindedState {
@@ -27,6 +29,10 @@ export function subgraphReducerDispatch(current: unknown, next: unknown): unknow
       return confirmSubgraphReducer(current, next);
     case 'cancel':
       return cancelSubgraphReducer(current, next);
+    case 'reschedule':
+      return rescheduleSubgraphReducer(current, next);
+    case 'query':
+      return querySubgraphReducer(current, next);
     default:
       // Sin discriminador: defaultea a replace. Cubre el primer entry
       // antes de que el subgrafo setee __kind, aunque en práctica los

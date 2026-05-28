@@ -1,8 +1,20 @@
-# Spec P3 — Unificar `validate_reschedule_slot` bajo `/tools/validate`
+# ⚠️ DESCARTADA — Spec P3 — Unificar `validate_reschedule_slot` bajo `/tools/validate`
+
+> **STATUS (2026-05-27): DESCARTADA**. Esta spec asumía que Guacuco tenía un
+> endpoint genérico `POST /api/v1/tools/validate` con un
+> `ToolValidationHandlerRegistry`. Durante H6.0 (Isladeplata) se verificó que
+> Guacuco **NUNCA tuvo ese endpoint** — solo `POST /api/v1/tools/execute`. El
+> tool `validate_reschedule_slot` ya existe como `ToolHandler` legacy y se
+> invoca via `executeTool('validate_reschedule_slot', ...)` con shape
+> `{appointment_uuid, profile_uuid, date_hint[], time_hint}`. Deriva
+> staff+services del appointment_uuid (no requiere context extra).
+>
+> H6 se implementó contra ese tool legacy. No hace falta unificar. La
+> deprecación del legacy queda fuera de alcance del v1 de Isladeplata.
 
 > **Repo target**: `project-m-guacuco`
 > **Consumidor**: `project-m-isladeplata` (agente conversacional)
-> **Prioridad**: P3 — debe estar desplegado antes de Hito 6 (subgrafo `reschedule`).
+> **Prioridad**: ~~P3 — debe estar desplegado antes de Hito 6 (subgrafo `reschedule`)~~ Descartada.
 > **Esfuerzo estimado**: bajo (nuevo `ToolValidationHandler` para `reschedule_appointment` + deprecación del endpoint legacy).
 
 ---

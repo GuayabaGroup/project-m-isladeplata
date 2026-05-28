@@ -29,6 +29,24 @@ import { makeConfirmBootstrapNode } from './subgraphs/confirm/nodes/bootstrap.js
 import { makeConfirmCommitNode } from './subgraphs/confirm/nodes/commit.js';
 import { makeConfirmSuccessNode } from './subgraphs/confirm/nodes/successResponse.js';
 import { type ConfirmDraftState, initialConfirmDraftState } from './subgraphs/confirm/state.js';
+// Query subgraph (H7)
+import { makeClassifyQueryNode } from './subgraphs/query/nodes/classifyQuery.js';
+import { makeFetchIntentNode } from './subgraphs/query/nodes/fetchIntent.js';
+import { makeSynthesizeResponseNode } from './subgraphs/query/nodes/synthesizeResponse.js';
+import { type QueryDraftState, initialQueryDraftState } from './subgraphs/query/state.js';
+// Reschedule subgraph (H6)
+import { makeRescheduleAskSlotNode } from './subgraphs/reschedule/nodes/askSlot.js';
+import { makeRescheduleBootstrapNode } from './subgraphs/reschedule/nodes/bootstrap.js';
+import { makeRescheduleBuildConfirmMessageNode } from './subgraphs/reschedule/nodes/buildConfirmMessage.js';
+import { makeRescheduleCommitNode } from './subgraphs/reschedule/nodes/commit.js';
+import { makeRescheduleGateConfirmNode } from './subgraphs/reschedule/nodes/gateConfirm.js';
+import { makeReschedulePresentOptionsNode } from './subgraphs/reschedule/nodes/presentOptions.js';
+import { makeRescheduleSuccessNode } from './subgraphs/reschedule/nodes/successResponse.js';
+import { makeRescheduleValidateNode } from './subgraphs/reschedule/nodes/validateAvailability.js';
+import {
+  type RescheduleDraftState,
+  initialRescheduleDraftState,
+} from './subgraphs/reschedule/state.js';
 import { makeAskSlotNode } from './subgraphs/schedule/nodes/askSlot.js';
 import { makeBuildConfirmMessageNode } from './subgraphs/schedule/nodes/buildConfirmMessage.js';
 import { checkCompleteness } from './subgraphs/schedule/nodes/checkCompleteness.js';
@@ -135,6 +153,21 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
   const cancelCommit = makeCancelCommitNode({ guacuco, logger });
   const cancelSuccess = makeCancelSuccessNode({ llm, logger });
 
+  // Reschedule nodes
+  const rescheduleBootstrap = makeRescheduleBootstrapNode({ logger });
+  const rescheduleAskSlot = makeRescheduleAskSlotNode({ logger });
+  const rescheduleValidate = makeRescheduleValidateNode({ guacuco, logger });
+  const reschedulePresent = makeReschedulePresentOptionsNode({ logger });
+  const rescheduleBuildConfirm = makeRescheduleBuildConfirmMessageNode({ llm, logger });
+  const rescheduleGate = makeRescheduleGateConfirmNode({ logger });
+  const rescheduleCommit = makeRescheduleCommitNode({ guacuco, logger });
+  const rescheduleSuccess = makeRescheduleSuccessNode({ llm, logger });
+
+  // Query nodes (H7)
+  const queryClassify = makeClassifyQueryNode({ llm, logger });
+  const queryFetch = makeFetchIntentNode({ guacuco, llm, logger });
+  const querySynthesize = makeSynthesizeResponseNode({ llm, logger });
+
   // Finalize compartido entre los 3 subgrafos.
   const subgraphFinalize = makeSubgraphFinalizeNode({ logger });
 
@@ -215,6 +248,23 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
     .addNode('cancel_commit', wrapScheduleAsync(cancelCommit))
     .addNode('cancel_success', wrapScheduleAsync(cancelSuccess))
     .addNode('cancel_finalize', subgraphFinalize)
+    // Reschedule subgraph nodes
+    .addNode('reschedule_dispatch', rescheduleDispatchNode)
+    .addNode('reschedule_bootstrap', wrapSchedule(rescheduleBootstrap))
+    .addNode('reschedule_ask_slot', wrapSchedule(rescheduleAskSlot))
+    .addNode('reschedule_validate', wrapScheduleAsync(rescheduleValidate))
+    .addNode('reschedule_present', wrapSchedule(reschedulePresent))
+    .addNode('reschedule_build_confirm', wrapScheduleAsync(rescheduleBuildConfirm))
+    .addNode('reschedule_gate', wrapSchedule(rescheduleGate))
+    .addNode('reschedule_commit', wrapScheduleAsync(rescheduleCommit))
+    .addNode('reschedule_success', wrapScheduleAsync(rescheduleSuccess))
+    .addNode('reschedule_finalize', subgraphFinalize)
+    // Query subgraph nodes (H7)
+    .addNode('query_dispatch', queryDispatchNode)
+    .addNode('query_classify', wrapScheduleAsync(queryClassify))
+    .addNode('query_fetch', wrapScheduleAsync(queryFetch))
+    .addNode('query_synthesize', wrapScheduleAsync(querySynthesize))
+    .addNode('query_finalize', subgraphFinalize)
     .addEdge(START, 'supervisor_entry')
     .addConditionalEdges('supervisor_entry', supervisorEntryRouter, {
       subgraph_placeholder: 'subgraph_placeholder',
@@ -222,6 +272,8 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
       schedule_dispatch: 'schedule_dispatch',
       confirm_dispatch: 'confirm_dispatch',
       cancel_dispatch: 'cancel_dispatch',
+      reschedule_dispatch: 'reschedule_dispatch',
+      query_dispatch: 'query_dispatch',
     })
     .addConditionalEdges('classify_intent', routeFromSupervisorWithSubgraphs, {
       social_responder: 'social_responder',
@@ -229,6 +281,8 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
       schedule_dispatch: 'schedule_dispatch',
       confirm_dispatch: 'confirm_dispatch',
       cancel_dispatch: 'cancel_dispatch',
+      reschedule_dispatch: 'reschedule_dispatch',
+      query_dispatch: 'query_dispatch',
       tool_retrieve_manzanillo_url: 'tool_retrieve_manzanillo_url',
       tool_generate_verification_url: 'tool_generate_verification_url',
       tool_connect_mercado_pago: 'tool_connect_mercado_pago',
@@ -318,6 +372,55 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
     })
     .addEdge('cancel_success', 'cancel_finalize')
     .addEdge('cancel_finalize', END)
+    // ===== Reschedule wiring =====
+    .addEdge('reschedule_dispatch', 'reschedule_bootstrap')
+    .addConditionalEdges('reschedule_bootstrap', routeAfterRescheduleBootstrap, {
+      reschedule_ask_slot: 'reschedule_ask_slot',
+      reschedule_validate: 'reschedule_validate',
+      reschedule_finalize: 'reschedule_finalize',
+    })
+    .addConditionalEdges('reschedule_ask_slot', routeAfterRescheduleAskSlot, {
+      reschedule_ask_slot: 'reschedule_ask_slot',
+      reschedule_validate: 'reschedule_validate',
+      reschedule_finalize: 'reschedule_finalize',
+    })
+    .addConditionalEdges('reschedule_validate', routeAfterRescheduleValidate, {
+      reschedule_build_confirm: 'reschedule_build_confirm',
+      reschedule_present: 'reschedule_present',
+      reschedule_finalize: 'reschedule_finalize',
+    })
+    .addConditionalEdges('reschedule_present', routeAfterReschedulePresent, {
+      reschedule_build_confirm: 'reschedule_build_confirm',
+      reschedule_validate: 'reschedule_validate',
+      reschedule_present: 'reschedule_present',
+      reschedule_finalize: 'reschedule_finalize',
+    })
+    .addEdge('reschedule_build_confirm', 'reschedule_gate')
+    .addConditionalEdges('reschedule_gate', routeAfterRescheduleGate, {
+      reschedule_commit: 'reschedule_commit',
+      reschedule_ask_slot: 'reschedule_ask_slot',
+      reschedule_finalize: 'reschedule_finalize',
+    })
+    .addConditionalEdges('reschedule_commit', routeAfterRescheduleCommit, {
+      reschedule_success: 'reschedule_success',
+      reschedule_validate: 'reschedule_validate',
+      reschedule_finalize: 'reschedule_finalize',
+    })
+    .addEdge('reschedule_success', 'reschedule_finalize')
+    .addEdge('reschedule_finalize', END)
+    // ===== Query wiring (H7) =====
+    .addEdge('query_dispatch', 'query_classify')
+    .addConditionalEdges('query_classify', routeAfterQueryClassify, {
+      query_fetch: 'query_fetch',
+      query_synthesize: 'query_synthesize',
+      query_finalize: 'query_finalize',
+    })
+    .addConditionalEdges('query_fetch', routeAfterQueryFetch, {
+      query_synthesize: 'query_synthesize',
+      query_finalize: 'query_finalize',
+    })
+    .addEdge('query_synthesize', 'query_finalize')
+    .addEdge('query_finalize', END)
     .compile({ checkpointer });
 
   return {
@@ -339,7 +442,7 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
 // directo al dispatch del subgrafo correspondiente.
 // ============================================================================
 
-type ActiveSubgraph = 'schedule' | 'confirm' | 'cancel';
+type ActiveSubgraph = 'schedule' | 'confirm' | 'cancel' | 'reschedule' | 'query';
 
 function supervisorEntryNode(state: GraphState): GraphStateUpdate {
   const message = state.input?.channelMessage;
@@ -347,8 +450,16 @@ function supervisorEntryNode(state: GraphState): GraphStateUpdate {
 
   // Si hay subgrafo activo, NO re-clasificamos — el resume va directo al
   // dispatcher correspondiente (que sabe cómo invocar el flujo interrumpido).
+  // Query no interrumpe en el happy path, así que no debería ver active='query'
+  // en el supervisor entry; defensa por si una future iteration lo agrega.
   const active = state.routing?.activeSubgraph as ActiveSubgraph | undefined;
-  if (active === 'schedule' || active === 'confirm' || active === 'cancel') {
+  if (
+    active === 'schedule' ||
+    active === 'confirm' ||
+    active === 'cancel' ||
+    active === 'reschedule' ||
+    active === 'query'
+  ) {
     return { routing: { activeSubgraph: active } };
   }
 
@@ -369,25 +480,35 @@ function supervisorEntryRouter(
   | 'classify_intent'
   | 'schedule_dispatch'
   | 'confirm_dispatch'
-  | 'cancel_dispatch' {
+  | 'cancel_dispatch'
+  | 'reschedule_dispatch'
+  | 'query_dispatch' {
   const active = state.routing?.activeSubgraph as ActiveSubgraph | undefined;
   if (active === 'schedule') return 'schedule_dispatch';
   if (active === 'confirm') return 'confirm_dispatch';
   if (active === 'cancel') return 'cancel_dispatch';
+  if (active === 'reschedule') return 'reschedule_dispatch';
+  if (active === 'query') return 'query_dispatch';
   return state.routing?.buttonShortcut ? 'subgraph_placeholder' : 'classify_intent';
 }
 
 /**
- * Wrap del router del supervisor para rutear schedule/confirm/cancel al
- * dispatch real (en lugar del placeholder).
+ * Wrap del router del supervisor para rutear schedule/confirm/cancel/reschedule/query
+ * al dispatch real (en lugar del placeholder).
  */
 function routeFromSupervisorWithSubgraphs(state: GraphState) {
   const base = routeFromSupervisor(state);
-  if (base === 'subgraph_placeholder' && state.routing?.messageType === 'action') {
-    const intent = state.routing.intent;
-    if (intent === 'schedule') return 'schedule_dispatch' as const;
-    if (intent === 'confirm') return 'confirm_dispatch' as const;
-    if (intent === 'cancel') return 'cancel_dispatch' as const;
+  if (base === 'subgraph_placeholder') {
+    if (state.routing?.messageType === 'action') {
+      const intent = state.routing.intent;
+      if (intent === 'schedule') return 'schedule_dispatch' as const;
+      if (intent === 'confirm') return 'confirm_dispatch' as const;
+      if (intent === 'cancel') return 'cancel_dispatch' as const;
+      if (intent === 'reschedule') return 'reschedule_dispatch' as const;
+    }
+    if (state.routing?.messageType === 'query') {
+      return 'query_dispatch' as const;
+    }
   }
   return base;
 }
@@ -604,4 +725,144 @@ function routeAfterCancelCommit(state: GraphState): 'cancel_success' | 'cancel_f
   if (!draft || draft.phase === 'failed' || draft.terminalOutcome) return 'cancel_finalize';
   if (draft.phase === 'done') return 'cancel_success';
   return 'cancel_finalize';
+}
+
+// ============================================================================
+// Reschedule subgraph dispatch + routers (H6)
+// ============================================================================
+
+function rescheduleDispatchNode(state: GraphState): GraphStateUpdate {
+  if (!state.identity) return { outcome: { action: 'ignored' } };
+  if (
+    state.subgraphState &&
+    (state.subgraphState as RescheduleDraftState).__kind === 'reschedule'
+  ) {
+    return { routing: { activeSubgraph: 'reschedule' } };
+  }
+  return {
+    routing: { activeSubgraph: 'reschedule' },
+    subgraphState: initialRescheduleDraftState(),
+  };
+}
+
+function readRescheduleDraft(state: GraphState): RescheduleDraftState | null {
+  const sub = state.subgraphState as RescheduleDraftState | null;
+  if (sub?.__kind !== 'reschedule') return null;
+  return sub;
+}
+
+function routeAfterRescheduleBootstrap(
+  state: GraphState,
+): 'reschedule_ask_slot' | 'reschedule_validate' | 'reschedule_finalize' {
+  const draft = readRescheduleDraft(state);
+  if (!draft || draft.phase === 'failed' || draft.terminalOutcome) return 'reschedule_finalize';
+  return decideAfterCollecting(draft);
+}
+
+function routeAfterRescheduleAskSlot(
+  state: GraphState,
+): 'reschedule_ask_slot' | 'reschedule_validate' | 'reschedule_finalize' {
+  const draft = readRescheduleDraft(state);
+  if (!draft || draft.phase === 'failed' || draft.terminalOutcome) return 'reschedule_finalize';
+  return decideAfterCollecting(draft);
+}
+
+function decideAfterCollecting(
+  draft: RescheduleDraftState,
+): 'reschedule_ask_slot' | 'reschedule_validate' {
+  const { appointmentUuid, newDate, newTime } = draft.slots;
+  const allResolved =
+    appointmentUuid.status === 'resolved' &&
+    !!appointmentUuid.value &&
+    newDate.status === 'resolved' &&
+    !!newDate.value &&
+    newTime.status === 'resolved' &&
+    !!newTime.value;
+  return allResolved ? 'reschedule_validate' : 'reschedule_ask_slot';
+}
+
+function routeAfterRescheduleValidate(
+  state: GraphState,
+): 'reschedule_build_confirm' | 'reschedule_present' | 'reschedule_finalize' {
+  const draft = readRescheduleDraft(state);
+  if (!draft || draft.phase === 'failed' || draft.terminalOutcome) return 'reschedule_finalize';
+  if (draft.phase === 'awaiting_confirmation') return 'reschedule_build_confirm';
+  if (draft.phase === 'awaiting_pick') return 'reschedule_present';
+  return 'reschedule_finalize';
+}
+
+function routeAfterReschedulePresent(
+  state: GraphState,
+):
+  | 'reschedule_build_confirm'
+  | 'reschedule_validate'
+  | 'reschedule_present'
+  | 'reschedule_finalize' {
+  const draft = readRescheduleDraft(state);
+  if (!draft || draft.phase === 'failed' || draft.terminalOutcome) return 'reschedule_finalize';
+  if (draft.phase === 'awaiting_confirmation') return 'reschedule_build_confirm';
+  if (draft.phase === 'collecting') return 'reschedule_validate';
+  if (draft.phase === 'awaiting_pick') return 'reschedule_present';
+  return 'reschedule_finalize';
+}
+
+function routeAfterRescheduleGate(
+  state: GraphState,
+): 'reschedule_commit' | 'reschedule_ask_slot' | 'reschedule_finalize' {
+  const draft = readRescheduleDraft(state);
+  if (!draft || draft.phase === 'failed' || draft.terminalOutcome) return 'reschedule_finalize';
+  if (draft.phase === 'committing') return 'reschedule_commit';
+  if (draft.phase === 'collecting') return 'reschedule_ask_slot';
+  return 'reschedule_finalize';
+}
+
+function routeAfterRescheduleCommit(
+  state: GraphState,
+): 'reschedule_success' | 'reschedule_validate' | 'reschedule_finalize' {
+  const draft = readRescheduleDraft(state);
+  if (!draft || draft.phase === 'failed' || draft.terminalOutcome) return 'reschedule_finalize';
+  if (draft.phase === 'validating_availability') return 'reschedule_validate';
+  if (draft.phase === 'done') return 'reschedule_success';
+  return 'reschedule_finalize';
+}
+
+// ============================================================================
+// Query subgraph dispatch + routers (H7)
+// ============================================================================
+
+function queryDispatchNode(state: GraphState): GraphStateUpdate {
+  if (!state.identity) return { outcome: { action: 'ignored' } };
+  // Si ya hay state (poco probable — query no interrumpe en happy path),
+  // preservar para no perder fetch en curso.
+  if (state.subgraphState && (state.subgraphState as QueryDraftState).__kind === 'query') {
+    return { routing: { activeSubgraph: 'query' } };
+  }
+  const userText = sanitizeUserInput(state.input?.channelMessage?.contentText ?? '');
+  return {
+    routing: { activeSubgraph: 'query' },
+    subgraphState: initialQueryDraftState(userText),
+  };
+}
+
+function readQueryDraft(state: GraphState): QueryDraftState | null {
+  const sub = state.subgraphState as QueryDraftState | null;
+  if (sub?.__kind !== 'query') return null;
+  return sub;
+}
+
+function routeAfterQueryClassify(
+  state: GraphState,
+): 'query_fetch' | 'query_synthesize' | 'query_finalize' {
+  const draft = readQueryDraft(state);
+  if (!draft || draft.phase === 'failed' || draft.terminalOutcome) return 'query_finalize';
+  if (draft.phase === 'fetching') return 'query_fetch';
+  if (draft.phase === 'synthesizing') return 'query_synthesize';
+  return 'query_finalize';
+}
+
+function routeAfterQueryFetch(state: GraphState): 'query_synthesize' | 'query_finalize' {
+  const draft = readQueryDraft(state);
+  if (!draft || draft.phase === 'failed' || draft.terminalOutcome) return 'query_finalize';
+  if (draft.phase === 'synthesizing') return 'query_synthesize';
+  return 'query_finalize';
 }

@@ -4,10 +4,11 @@ import type { Logger } from 'winston';
 import { GuacucoClient } from '../../../src/clients/GuacucoClient.js';
 import type { Envelope } from '../../../src/clients/types/Envelope.js';
 import type {
+  CheckAvailabilityResult,
   ResolveIdentityOutput,
   ScheduleAppointmentResult,
   ToolExecuteResponse,
-  ToolValidateResult,
+  ValidateRescheduleSlotResult,
 } from '../../../src/clients/types/GuacucoTypes.js';
 import { IdentityNotFoundError } from '../../../src/core/errors/IdentityNotFoundError.js';
 import { ToolExecutionError } from '../../../src/core/errors/ToolExecutionError.js';
@@ -211,85 +212,217 @@ describe('GuacucoClient.executeTool', () => {
   });
 });
 
-describe('GuacucoClient.validateScheduleSlot', () => {
-  it('sends date+time parameters and returns validate result', async () => {
+describe('GuacucoClient.validateRescheduleSlot', () => {
+  it('calls executeTool with tool_name=validate_reschedule_slot and legacy shape', async () => {
     const mockHttp = makeMockHttp();
-    const validateResult: ToolValidateResult = {
-      valid: false,
-      results: [
-        { name: 'date', valid: true, message: null },
-        { name: 'appointment_time', valid: false, message: 'taken' },
-      ],
-      suggestions: { appointment_time: ['10:00', '11:00', '14:00'] },
+    const validateResult: ValidateRescheduleSlotResult = {
+      passed: true,
+      proposed_slots: [{ date: '2026-06-05', time: '14:00' }],
+      appointment_uuid: 'apt-99',
+      service_duration_minutes: 60,
     };
-    mockHttp.post.mockResolvedValue(makeResponse({ success: true, data: validateResult }));
+    mockHttp.post.mockResolvedValue(
+      makeResponse({
+        success: true,
+        data: { tool_name: 'validate_reschedule_slot', result: validateResult },
+      }),
+    );
 
     const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
-    const result = await client.validateScheduleSlot({
-      date: '2026-06-01',
-      appointment_time: '09:00',
-      business_allia_id: 'allia-1',
-      staff_uuid: 'stf-1',
-      service_uuids: ['svc-1'],
+    const result = await client.validateRescheduleSlot({
+      appointment_uuid: 'apt-99',
+      profile_uuid: 'cli-1',
+      date_hint: ['2026-06-05'],
+      time_hint: '14:00',
     });
 
-    expect(result.valid).toBe(false);
-    expect(mockHttp.post).toHaveBeenCalledWith('/api/v1/tools/validate', {
-      tool_name: 'schedule_appointment',
-      parameters: [
-        { name: 'date', value: '2026-06-01' },
-        { name: 'appointment_time', value: '09:00' },
-      ],
-      context: {
-        business_allia_id: 'allia-1',
-        staff_uuid: 'stf-1',
-        service_uuids: ['svc-1'],
+    expect(result.passed).toBe(true);
+    expect(result.proposed_slots).toEqual([{ date: '2026-06-05', time: '14:00' }]);
+    expect(mockHttp.post).toHaveBeenCalledWith('/api/v1/tools/execute', {
+      tool_name: 'validate_reschedule_slot',
+      parameters: {
+        appointment_uuid: 'apt-99',
+        profile_uuid: 'cli-1',
+        date_hint: ['2026-06-05'],
+        time_hint: '14:00',
       },
     });
   });
 
-  it('omits parameters not provided', async () => {
+  it('returns passed=false with proposed_slots when exact slot unavailable', async () => {
     const mockHttp = makeMockHttp();
+    const validateResult: ValidateRescheduleSlotResult = {
+      passed: false,
+      proposed_slots: [
+        { date: '2026-06-05', time: '15:00' },
+        { date: '2026-06-05', time: '16:00' },
+      ],
+      appointment_uuid: 'apt-99',
+      service_duration_minutes: 60,
+      fallback: {
+        kind: 'selection_list',
+        slot_name: 'reschedule_slot',
+        header: 'Horarios disponibles:',
+        button_text: 'Elegir horario',
+        options: [{ id: '2026-06-05|15:00', title: '5 jun 15:00', description: '5 junio 15:00' }],
+      },
+    };
     mockHttp.post.mockResolvedValue(
-      makeResponse({ success: true, data: { valid: true, results: [] } }),
+      makeResponse({
+        success: true,
+        data: { tool_name: 'validate_reschedule_slot', result: validateResult },
+      }),
     );
 
     const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
-    await client.validateScheduleSlot({
-      date: '2026-06-01',
-      business_allia_id: 'allia-1',
-      staff_uuid: 'stf-1',
-      service_uuids: ['svc-1'],
+    const result = await client.validateRescheduleSlot({
+      appointment_uuid: 'apt-99',
+      profile_uuid: 'cli-1',
+      date_hint: ['2026-06-05'],
+      time_hint: '14:00',
     });
 
-    const sentBody = mockHttp.post.mock.calls[0]?.[1] as { parameters: unknown[] };
-    expect(sentBody.parameters).toEqual([{ name: 'date', value: '2026-06-01' }]);
+    expect(result.passed).toBe(false);
+    expect(result.proposed_slots).toHaveLength(2);
+    expect(result.fallback?.kind).toBe('selection_list');
   });
 });
 
-describe('GuacucoClient.validateRescheduleSlot', () => {
-  it('includes appointment_uuid in context for own-slot exclusion', async () => {
+describe('GuacucoClient.getStaffAppointmentsSummary', () => {
+  it('calls executeTool with profile/business uuids in context', async () => {
     const mockHttp = makeMockHttp();
     mockHttp.post.mockResolvedValue(
-      makeResponse({ success: true, data: { valid: true, results: [] } }),
+      makeResponse({
+        success: true,
+        data: {
+          tool_name: 'get_staff_appointments_summary',
+          result: {
+            response_type: 'text',
+            message: 'ok',
+            summary: 'Hoy: 0 turnos',
+            total: 0,
+            date_start: '2026-05-28',
+            date_end: '2026-05-28',
+            appointments: [],
+          },
+        },
+      }),
     );
 
     const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
-    await client.validateRescheduleSlot({
-      new_date: '2026-06-05',
-      new_time: '14:00',
-      business_allia_id: 'allia-1',
-      staff_uuid: 'stf-1',
-      service_uuids: ['svc-1'],
-      appointment_uuid: 'apt-99',
+    const result = await client.getStaffAppointmentsSummary(
+      { date_start: '2026-05-28', date_end: '2026-05-28' },
+      { profileUuid: 'staff-uuid', businessUuid: 'biz-uuid' },
+    );
+    expect(result.total).toBe(0);
+    expect(mockHttp.post).toHaveBeenCalledWith('/api/v1/tools/execute', {
+      tool_name: 'get_staff_appointments_summary',
+      parameters: { date_start: '2026-05-28', date_end: '2026-05-28' },
+      context: {
+        profile_uuid: 'staff-uuid',
+        business_uuid: 'biz-uuid',
+        profile_type: 'staff',
+      },
     });
+  });
+});
 
-    const sentBody = mockHttp.post.mock.calls[0]?.[1] as {
-      tool_name: string;
-      context: Record<string, unknown>;
-    };
-    expect(sentBody.tool_name).toBe('reschedule_appointment');
-    expect(sentBody.context.appointment_uuid).toBe('apt-99');
+describe('GuacucoClient.query-processor', () => {
+  it('getQueryTables: GET con profile_type + role_id en params', async () => {
+    const mockHttp = makeMockHttp();
+    mockHttp.get.mockResolvedValue(
+      makeResponse({
+        success: true,
+        data: [
+          {
+            table_name: 'front_sche_client.services',
+            table_comment: 'Services catalog',
+            columns: [
+              { column_name: 'service_uuid', column_comment: null },
+              { column_name: 'service_name', column_comment: 'Display name' },
+            ],
+          },
+        ],
+      }),
+    );
+
+    const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
+    const result = await client.getQueryTables('staff', 1);
+    expect(result).toHaveLength(1);
+    expect(mockHttp.get).toHaveBeenCalledWith('/api/v1/query-processor/tables', {
+      params: { profile_type: 'staff', role_id: 1 },
+    });
+  });
+
+  it('getQueryTables: client role omits role_id', async () => {
+    const mockHttp = makeMockHttp();
+    mockHttp.get.mockResolvedValue(makeResponse({ success: true, data: [] }));
+    const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
+    await client.getQueryTables('client');
+    expect(mockHttp.get).toHaveBeenCalledWith('/api/v1/query-processor/tables', {
+      params: { profile_type: 'client' },
+    });
+  });
+
+  it('getQueryTableSchema: encodes table name + sends params', async () => {
+    const mockHttp = makeMockHttp();
+    mockHttp.get.mockResolvedValue(
+      makeResponse({
+        success: true,
+        data: { columns: [], foreignKeys: [] },
+      }),
+    );
+    const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
+    await client.getQueryTableSchema('services', 'staff', 2);
+    expect(mockHttp.get).toHaveBeenCalledWith('/api/v1/query-processor/tables/services/schema', {
+      params: { profile_type: 'staff', role_id: 2 },
+    });
+  });
+
+  it('executeQuery: POST con sql + profile_type + role_id (stringified)', async () => {
+    const mockHttp = makeMockHttp();
+    mockHttp.post.mockResolvedValue(
+      makeResponse({
+        success: true,
+        data: { rows: [{ count: 5 }], rowCount: 1 },
+      }),
+    );
+    const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
+    const result = await client.executeQuery('SELECT count(*) FROM services', 'staff', 1, 5000);
+    expect(result.rows).toEqual([{ count: 5 }]);
+    expect(mockHttp.post).toHaveBeenCalledWith('/api/v1/query-processor/query', {
+      sql: 'SELECT count(*) FROM services',
+      profile_type: 'staff',
+      role_id: '1',
+      timeout: 5000,
+    });
+  });
+
+  it('executeQuery: client role omits role_id', async () => {
+    const mockHttp = makeMockHttp();
+    mockHttp.post.mockResolvedValue(
+      makeResponse({ success: true, data: { rows: [], rowCount: 0 } }),
+    );
+    const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
+    await client.executeQuery('SELECT 1', 'client');
+    expect(mockHttp.post).toHaveBeenCalledWith('/api/v1/query-processor/query', {
+      sql: 'SELECT 1',
+      profile_type: 'client',
+    });
+  });
+
+  it('executeQuery: propagates ToolExecutionError on Guacuco rejection', async () => {
+    const mockHttp = makeMockHttp();
+    mockHttp.post.mockResolvedValue(
+      makeResponse({
+        success: false,
+        error: { code: 'DANGEROUS_KEYWORD_DETECTED', message: 'DROP not allowed' },
+      }),
+    );
+    const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
+    await expect(client.executeQuery('DROP TABLE x', 'staff', 1)).rejects.toMatchObject({
+      code: 'DANGEROUS_KEYWORD_DETECTED',
+    });
   });
 });
 
@@ -319,5 +452,38 @@ describe('GuacucoClient.checkAvailability', () => {
 
     const sentBody = mockHttp.post.mock.calls[0]?.[1] as { tool_name: string };
     expect(sentBody.tool_name).toBe('check_availability');
+  });
+
+  it('returns available=true + empty suggestions in Mode A on hit', async () => {
+    const mockHttp = makeMockHttp();
+    const availResult: CheckAvailabilityResult = {
+      response_type: 'text',
+      message: 'available',
+      available: true,
+      date: '2026-06-01',
+      start_time: '10:00',
+      end_time: '11:00',
+      staff_uuid: 'stf-1',
+      service_uuids: ['svc-1'],
+      total_duration_minutes: 60,
+      suggestions: { schedule_appointment: [] },
+    };
+    mockHttp.post.mockResolvedValue(
+      makeResponse({
+        success: true,
+        data: { tool_name: 'check_availability', result: availResult },
+      }),
+    );
+
+    const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
+    const result = await client.checkAvailability({
+      business_allia_id: 'allia-1',
+      staff_uuid: 'stf-1',
+      service_uuids: ['svc-1'],
+      date: '2026-06-01',
+      appointment_time: '10:00',
+    });
+
+    expect(result.available).toBe(true);
   });
 });
