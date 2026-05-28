@@ -1,8 +1,10 @@
-import express, { type Express } from 'express';
+import express, { type Express, type RequestHandler } from 'express';
 import type { WhatsAppWebhookHandler } from '../../channels/whatsapp/webhook.js';
 
 export interface RouterDeps {
   whatsappWebhook: WhatsAppWebhookHandler;
+  /** Si presente, se monta `/metrics` con auth via header X-Metrics-Key. */
+  metricsHandler?: RequestHandler;
 }
 
 /**
@@ -19,4 +21,7 @@ export function registerRoutes(app: Express, deps: RouterDeps): void {
     express.raw({ type: 'application/json', limit: '256kb' }),
     deps.whatsappWebhook.handle,
   );
+  if (deps.metricsHandler) {
+    app.get('/metrics', deps.metricsHandler);
+  }
 }

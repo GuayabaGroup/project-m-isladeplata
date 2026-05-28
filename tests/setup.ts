@@ -50,3 +50,7 @@ process.env.CHECKPOINTER_CLEANUP_INTERVAL_SECONDS =
 process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY ?? 'test-anthropic-key';
 process.env.SUPERVISOR_MODEL = process.env.SUPERVISOR_MODEL ?? 'claude-haiku-4-5-20251001';
 process.env.RESPONSE_MODEL = process.env.RESPONSE_MODEL ?? 'claude-haiku-4-5-20251001';
+
+// Metrics (H8.2) — vacío en tests para no exponer endpoint por default.
+// Tests específicos del endpoint setean el valor antes de instanciar el handler.
+process.env.METRICS_API_KEY = process.env.METRICS_API_KEY ?? '';

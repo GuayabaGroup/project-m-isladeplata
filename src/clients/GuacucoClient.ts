@@ -11,6 +11,8 @@ import type {
   ConfirmAppointmentResult,
   GetStaffAppointmentsSummaryParams,
   GetStaffAppointmentsSummaryResult,
+  PersistAgentTurnsRequest,
+  PersistAgentTurnsResponse,
   QueryProcessorExecuteResponse,
   QueryProcessorSchemaResponse,
   QueryProcessorTablesResponse,
@@ -30,6 +32,7 @@ const RESOLVE_IDENTITY_PATH = '/identity/resolve';
 const TOOL_EXECUTE_PATH = '/api/v1/tools/execute';
 const QUERY_TABLES_PATH = '/api/v1/query-processor/tables';
 const QUERY_EXECUTE_PATH = '/api/v1/query-processor/query';
+const PERSIST_AGENT_TURNS_PATH = '/api/v1/conversations/agent-turns';
 
 export interface ExecuteOptions {
   context?: Record<string, unknown>;
@@ -273,5 +276,26 @@ export class GuacucoClient extends BaseHttpClient {
       body,
     );
     return this.unwrap<QueryProcessorExecuteResponse>(response);
+  }
+
+  // ==========================================================================
+  // Persistence — conversation turns (spec P2)
+  // ==========================================================================
+
+  /**
+   * Persiste un turno del agente (user + opcional assistant) en Guacuco.
+   * Idempotente por `(thread_id, turn_id, role)` a nivel de BD; reenvíos
+   * del mismo `turn_id` retornan `persisted: false`.
+   *
+   * Llamado fire-and-forget desde `ConversationPersister`. Si Guacuco
+   * responde error o el endpoint está caído, el caller swallowa: la
+   * persistencia es analítica, NO bloquea el turno hacia el usuario.
+   */
+  async persistAgentTurns(payload: PersistAgentTurnsRequest): Promise<PersistAgentTurnsResponse> {
+    const response = await this.http.post<Envelope<PersistAgentTurnsResponse>>(
+      PERSIST_AGENT_TURNS_PATH,
+      payload,
+    );
+    return this.unwrap<PersistAgentTurnsResponse>(response);
   }
 }

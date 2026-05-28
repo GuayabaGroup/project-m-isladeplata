@@ -12,10 +12,12 @@ import {
   createCheckpointerService,
 } from '../infrastructure/checkpointer/PostgresCheckpointerService.js';
 import { RetryClient } from '../infrastructure/http/RetryClient.js';
+import { createMetricsHandler } from '../infrastructure/http/metricsHandler.js';
 import { errorHandler } from '../infrastructure/http/middleware/errorHandler.js';
 import { registerRoutes } from '../infrastructure/http/registerRoutes.js';
 import { AnthropicProvider } from '../infrastructure/llm/AnthropicProvider.js';
 import { logger } from '../infrastructure/observability/logger.js';
+import { metricsRegistry } from '../infrastructure/observability/metrics.js';
 import { closeSentry, initSentry } from '../infrastructure/observability/sentry.js';
 import { DedupStore } from '../infrastructure/redis/DedupStore.js';
 import { RateLimitStore } from '../infrastructure/redis/RateLimitStore.js';
@@ -26,6 +28,7 @@ import {
 } from '../infrastructure/redis/RedisConnection.js';
 import { initLangSmith } from '../infrastructure/tracing/langsmith.js';
 import { ResponseBuilder } from '../nlg/ResponseBuilder.js';
+import { ConversationPersister } from '../pregraph/ConversationPersister.js';
 import { ResponseDispatcher } from '../pregraph/ResponseDispatcher.js';
 import { ThreadResolver } from '../pregraph/ThreadResolver.js';
 import { Pipeline } from '../pregraph/pipeline.js';
@@ -103,6 +106,8 @@ export async function bootstrap(): Promise<BootstrappedApp> {
   const threadResolver = new ThreadResolver(checkpointer, logger);
   const graph = compileGraph({ checkpointer: checkpointer.saver, logger, llm, guacuco });
 
+  const persister = new ConversationPersister(guacuco, logger);
+
   const pipeline = new Pipeline({
     dedup,
     rateLimit,
@@ -111,6 +116,7 @@ export async function bootstrap(): Promise<BootstrappedApp> {
     threadResolver,
     graph,
     dispatcher,
+    persister,
     logger,
   });
 
@@ -141,7 +147,14 @@ export async function bootstrap(): Promise<BootstrappedApp> {
     });
   });
 
-  registerRoutes(app, { whatsappWebhook });
+  const metricsHandler = env.METRICS_API_KEY
+    ? createMetricsHandler(metricsRegistry, env.METRICS_API_KEY)
+    : undefined;
+  if (!metricsHandler) {
+    logger.info('Metrics endpoint disabled (METRICS_API_KEY empty)');
+  }
+
+  registerRoutes(app, { whatsappWebhook, ...(metricsHandler ? { metricsHandler } : {}) });
   app.use(errorHandler);
 
   async function cleanup(): Promise<void> {

@@ -261,6 +261,64 @@ export interface QueryProcessorExecuteResponse {
   rowCount: number;
 }
 
+// ============================================================================
+// Persist agent turns — POST /api/v1/conversations/agent-turns (spec P2)
+// Fire-and-forget desde el agente al cierre del pipeline.
+// Idempotente por (thread_id, turn_id, role) a nivel de tabla en Guacuco.
+// ============================================================================
+
+export interface PersistAgentTurnInteractivePayload {
+  type: 'button' | 'list';
+  id: string;
+  title?: string;
+}
+
+export interface PersistAgentTurnToolCall {
+  tool_name: string;
+  input: unknown;
+  result_status: 'ok' | 'error';
+  error_code?: string;
+}
+
+export interface PersistAgentTurnUserMessage {
+  role: 'user';
+  content: string;
+  received_at: string;
+  metadata?: {
+    message_id?: string;
+    interactive_payload?: PersistAgentTurnInteractivePayload | null;
+  };
+}
+
+export interface PersistAgentTurnAssistantMessage {
+  role: 'assistant';
+  content: string;
+  sent_at: string;
+  outcome_action?: string;
+  subgraph?: string;
+  tool_calls?: PersistAgentTurnToolCall[];
+}
+
+export type PersistAgentTurnMessage =
+  | PersistAgentTurnUserMessage
+  | PersistAgentTurnAssistantMessage;
+
+export interface PersistAgentTurnsRequest {
+  tenant_allia_id: string;
+  thread_id: string;
+  profile_uuid: string;
+  profile_type: 'staff' | 'client';
+  channel: string;
+  platform_id: number;
+  turn_id: string;
+  turns: PersistAgentTurnMessage[];
+}
+
+export interface PersistAgentTurnsResponse {
+  turn_id: string;
+  persisted: boolean;
+}
+
 // confirm_appointment
 
 export interface ConfirmAppointmentParams {

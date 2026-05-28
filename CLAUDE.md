@@ -12,6 +12,8 @@ Toda auditoría de código contra ese documento. Un hallazgo de auditoría es v�
 
 [`docs/SPRINT.md`](docs/SPRINT.md) — 9 hitos H0 → H8. Specs para el equipo Guacuco (P1 idempotency, P2 persistencia turnos) en [`docs/specs/`](docs/specs/). P3 fue descartada en H6 — Guacuco ya tenía el tool `validate_reschedule_slot` legacy que cubre el caso.
 
+Features intencionalmente excluidas de v1 (con trigger para reabrir): [`docs/PENDING_ITER2.md`](docs/PENDING_ITER2.md).
+
 ## Quick commands
 
 ```bash
@@ -49,7 +51,10 @@ pnpm lint:fix          # biome check --write
 - **H5 — Subgrafos `confirm` + `cancel`** ✅
 - **H6 — Subgrafo `reschedule`** ✅ (P3 descartada — Guacuco ya tenía el tool legacy correcto)
 - **H7 — Subgrafo `query`** ✅ (4 intents fijos + freeform_sql via port de IDP_OV1; sin QueryJudge ni drill-down iter 1)
-- H8 — Persistencia turnos (P2) + cutover
+- **H8.1 — Persistencia turnos (P2 wire fire-and-forget)** ✅
+- **H8.2 — Métricas (prom-client + Sentry spans + /metrics endpoint)** ✅
+- **H8.3 — Cutover docs (`docs/RUNBOOK_CUTOVER.md`)** ✅ (scope reducido: cutover directo sin router dual ni rollout gradual)
+- H8.4 — primer mensaje real en producción + observación 24h
 
 Actualizar este checklist a medida que se completen hitos.
 

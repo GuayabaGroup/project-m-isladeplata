@@ -5,6 +5,8 @@ import { GuacucoClient } from '../../../src/clients/GuacucoClient.js';
 import type { Envelope } from '../../../src/clients/types/Envelope.js';
 import type {
   CheckAvailabilityResult,
+  PersistAgentTurnsRequest,
+  PersistAgentTurnsResponse,
   ResolveIdentityOutput,
   ScheduleAppointmentResult,
   ToolExecuteResponse,
@@ -485,5 +487,80 @@ describe('GuacucoClient.checkAvailability', () => {
     });
 
     expect(result.available).toBe(true);
+  });
+});
+
+describe('GuacucoClient.persistAgentTurns', () => {
+  const samplePayload: PersistAgentTurnsRequest = {
+    tenant_allia_id: 'allia-1',
+    thread_id: 'biz-1:cli-1:whatsapp:1',
+    profile_uuid: 'cli-1',
+    profile_type: 'client',
+    channel: 'whatsapp',
+    platform_id: 1,
+    turn_id: '660e8400-e29b-41d4-a716-446655440001',
+    turns: [
+      {
+        role: 'user',
+        content: 'hola',
+        received_at: '2026-05-27T15:30:00Z',
+        metadata: { message_id: 'wamid.ABC', interactive_payload: null },
+      },
+      {
+        role: 'assistant',
+        content: 'Hola, ¿en qué puedo ayudarte?',
+        sent_at: '2026-05-27T15:30:02Z',
+        outcome_action: 'response',
+      },
+    ],
+  };
+
+  it('posts payload to /api/v1/conversations/agent-turns and returns response', async () => {
+    const mockHttp = makeMockHttp();
+    const response: PersistAgentTurnsResponse = {
+      turn_id: '660e8400-e29b-41d4-a716-446655440001',
+      persisted: true,
+    };
+    mockHttp.post.mockResolvedValue(makeResponse({ success: true, data: response }, 202));
+
+    const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
+    const result = await client.persistAgentTurns(samplePayload);
+
+    expect(result).toEqual(response);
+    expect(mockHttp.post).toHaveBeenCalledWith('/api/v1/conversations/agent-turns', samplePayload);
+  });
+
+  it('returns persisted=false on duplicate turn_id (idempotent)', async () => {
+    const mockHttp = makeMockHttp();
+    mockHttp.post.mockResolvedValue(
+      makeResponse(
+        {
+          success: true,
+          data: { turn_id: samplePayload.turn_id, persisted: false },
+        },
+        202,
+      ),
+    );
+
+    const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
+    const result = await client.persistAgentTurns(samplePayload);
+
+    expect(result.persisted).toBe(false);
+    expect(result.turn_id).toBe(samplePayload.turn_id);
+  });
+
+  it('propagates backend errors as ToolExecutionError', async () => {
+    const mockHttp = makeMockHttp();
+    mockHttp.post.mockResolvedValue(
+      makeResponse({
+        success: false,
+        error: { code: 'BUSINESS_NOT_FOUND', message: 'tenant missing' },
+      }),
+    );
+
+    const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
+    await expect(client.persistAgentTurns(samplePayload)).rejects.toBeInstanceOf(
+      ToolExecutionError,
+    );
   });
 });

@@ -1,4 +1,5 @@
 import { Command } from '@langchain/langgraph';
+import * as Sentry from '@sentry/node';
 import type { Logger } from 'winston';
 import type { MessageProcessor } from '../channels/ChannelAdapter.js';
 import type { GuacucoClient } from '../clients/GuacucoClient.js';
@@ -11,10 +12,18 @@ import type { Identity } from '../core/types/Identity.js';
 import type { Outcome } from '../core/types/Outcome.js';
 import type { CompiledGraph } from '../graph/compile.js';
 import type { ResumePayload } from '../graph/subgraphs/schedule/nodes/askSlot.js';
+import {
+  identityNotFoundTotal,
+  pipelineLatencyMs,
+  rateLimitHitTotal,
+  subgraphEnteredTotal,
+  turnProcessedTotal,
+} from '../infrastructure/observability/metrics.js';
 import { captureIdpError } from '../infrastructure/observability/sentry.js';
 import type { DedupStore } from '../infrastructure/redis/DedupStore.js';
 import type { RateLimitStore } from '../infrastructure/redis/RateLimitStore.js';
 import { sanitizeUserInput } from '../security/sanitize.js';
+import type { ConversationPersister } from './ConversationPersister.js';
 import type { ResponseDispatcher } from './ResponseDispatcher.js';
 import type { ThreadResolver } from './ThreadResolver.js';
 import { buildWelcomeOutcome } from './welcomeFlow.js';
@@ -27,6 +36,7 @@ export interface PipelineDeps {
   threadResolver: ThreadResolver;
   graph: CompiledGraph;
   dispatcher: ResponseDispatcher;
+  persister: ConversationPersister;
   logger: Logger;
 }
 
@@ -53,6 +63,7 @@ export class Pipeline implements MessageProcessor {
   private readonly threadResolver: ThreadResolver;
   private readonly graph: CompiledGraph;
   private readonly dispatcher: ResponseDispatcher;
+  private readonly persister: ConversationPersister;
   private readonly logger: Logger;
 
   constructor(deps: PipelineDeps) {
@@ -63,10 +74,32 @@ export class Pipeline implements MessageProcessor {
     this.threadResolver = deps.threadResolver;
     this.graph = deps.graph;
     this.dispatcher = deps.dispatcher;
+    this.persister = deps.persister;
     this.logger = deps.logger;
   }
 
   async process(message: ChannelMessage): Promise<Outcome> {
+    const startNs = process.hrtime.bigint();
+    const outcome = await Sentry.startSpan(
+      {
+        name: 'pipeline.process',
+        op: 'pipeline',
+        attributes: {
+          'isladeplata.channel': message.channelType,
+          'isladeplata.message_id': message.messageId,
+        },
+      },
+      async () => this.runWithGlobalCatch(message),
+    );
+    const elapsedMs = Number((process.hrtime.bigint() - startNs) / 1_000_000n);
+    pipelineLatencyMs.labels({ outcome_action: outcome.action }).observe(elapsedMs);
+    turnProcessedTotal
+      .labels({ channel: message.channelType, outcome_action: outcome.action })
+      .inc();
+    return outcome;
+  }
+
+  private async runWithGlobalCatch(message: ChannelMessage): Promise<Outcome> {
     try {
       return await this.processInternal(message);
     } catch (err) {
@@ -118,6 +151,7 @@ export class Pipeline implements MessageProcessor {
           channelType: message.channelType,
           messageId: message.messageId,
         });
+        identityNotFoundTotal.labels({ channel: message.channelType }).inc();
         return { action: 'ignored' };
       }
       throw err;
@@ -126,41 +160,29 @@ export class Pipeline implements MessageProcessor {
     // 3. Welcome flow para new staff (Guacuco auto-onboardea silenciosamente)
     if (identity.isNewUser) {
       const outcome = buildWelcomeOutcome(identity.welcomeMessage, identity.onboardingUrl);
+      subgraphEnteredTotal.labels({ subgraph: 'welcome' }).inc();
       await this.dispatcher.dispatch(message, outcome);
+      const welcomeIdentity = toInternalIdentityOrNull(identity, message);
+      if (welcomeIdentity) {
+        void this.persister.persistTurn(message, welcomeIdentity, outcome, {
+          subgraph: 'welcome',
+        });
+      }
       return outcome;
     }
 
     // 4. Invariantes pre-downstream
-    const businessUuid = identity.businessStaffRoles?.business_uuid;
-    const tenantAlliaId = identity.businessStaffRoles?.business_allia_id;
-    const platformId = identity.businessStaffRoles?.platform_id;
-    const profileUuid = identity.profileData.client_uuid ?? identity.profileData.staff_uuid;
-
-    if (!businessUuid || !tenantAlliaId || !profileUuid || platformId == null) {
+    const internalIdentity = toInternalIdentityOrNull(identity, message);
+    if (!internalIdentity) {
       this.logger.warn('Identity resolved but missing required fields', {
-        hasBusiness: !!businessUuid,
-        hasAlliaId: !!tenantAlliaId,
-        hasProfile: !!profileUuid,
-        hasPlatform: platformId != null,
+        hasBusiness: !!identity.businessStaffRoles?.business_uuid,
+        hasAlliaId: !!identity.businessStaffRoles?.business_allia_id,
+        hasProfile: !!(identity.profileData.client_uuid ?? identity.profileData.staff_uuid),
+        hasPlatform: identity.businessStaffRoles?.platform_id != null,
       });
       return { action: 'ignored' };
     }
-
-    const internalIdentity: Identity = {
-      tenantUuid: businessUuid,
-      tenantAlliaId,
-      profileUuid,
-      profileType: identity.profileType,
-      platformId,
-      channel: message.channelType,
-      timezone: identity.userTimezone,
-      ...(identity.businessStaffRoles?.business_name
-        ? { tenantName: identity.businessStaffRoles.business_name }
-        : {}),
-      ...(identity.businessStaffRoles?.role_id
-        ? { roleId: identity.businessStaffRoles.role_id }
-        : {}),
-    };
+    const { tenantUuid: businessUuid, profileUuid } = internalIdentity;
 
     // 5. Rate limit
     const rateResult = await this.rateLimit.checkLimit({
@@ -175,7 +197,9 @@ export class Pipeline implements MessageProcessor {
           text: 'Estás enviando muchos mensajes. Esperá un momento y volvé a intentarlo.',
         },
       };
+      rateLimitHitTotal.labels({ channel: message.channelType }).inc();
       await this.dispatcher.dispatch(message, outcome);
+      void this.persister.persistTurn(message, internalIdentity, outcome);
       return outcome;
     }
 
@@ -197,30 +221,40 @@ export class Pipeline implements MessageProcessor {
     // Si no hay interrupt, invoke fresh con el state completo.
     const pendingInterrupts = await this.detectPendingInterrupts(thread.threadId);
 
-    let graphResult: Awaited<ReturnType<CompiledGraph['invoke']>>;
-    if (pendingInterrupts) {
-      const resumePayload: ResumePayload = {
-        text: sanitizeUserInput(message.contentText),
-        ...(message.interactivePayload?.id ? { buttonId: message.interactivePayload.id } : {}),
-      };
-      this.logger.debug('Resuming graph with Command(resume)', {
-        thread_id: thread.threadId,
-        hasButton: !!resumePayload.buttonId,
-      });
-      graphResult = await this.graph.invoke(new Command({ resume: resumePayload }), {
-        configurable: { thread_id: thread.threadId },
-      });
-    } else {
-      graphResult = await this.graph.invoke(
-        {
-          input: { channelMessage: message, receivedAt: message.receivedAt },
-          identity: internalIdentity,
-          crmContext,
-          catalog,
+    const graphResult = await Sentry.startSpan(
+      {
+        name: 'pipeline.graph.invoke',
+        op: 'graph.invoke',
+        attributes: {
+          'isladeplata.thread_id': thread.threadId,
+          'isladeplata.resume': pendingInterrupts,
         },
-        { configurable: { thread_id: thread.threadId } },
-      );
-    }
+      },
+      async (): Promise<Awaited<ReturnType<CompiledGraph['invoke']>>> => {
+        if (pendingInterrupts) {
+          const resumePayload: ResumePayload = {
+            text: sanitizeUserInput(message.contentText),
+            ...(message.interactivePayload?.id ? { buttonId: message.interactivePayload.id } : {}),
+          };
+          this.logger.debug('Resuming graph with Command(resume)', {
+            thread_id: thread.threadId,
+            hasButton: !!resumePayload.buttonId,
+          });
+          return this.graph.invoke(new Command({ resume: resumePayload }), {
+            configurable: { thread_id: thread.threadId },
+          });
+        }
+        return this.graph.invoke(
+          {
+            input: { channelMessage: message, receivedAt: message.receivedAt },
+            identity: internalIdentity,
+            crmContext,
+            catalog,
+          },
+          { configurable: { thread_id: thread.threadId } },
+        );
+      },
+    );
 
     // Si el grafo se interrumpió en este turno, el outcome al usuario viene
     // del payload del interrupt (no del state.outcome — porque el nodo que
@@ -229,6 +263,14 @@ export class Pipeline implements MessageProcessor {
 
     // 8. Dispatch
     await this.dispatcher.dispatch(message, outcome);
+
+    // 9. Persistencia turn-by-turn (fire-and-forget — spec P2).
+    const subgraph = (graphResult as { routing?: { activeSubgraph?: string } }).routing
+      ?.activeSubgraph;
+    if (subgraph) subgraphEnteredTotal.labels({ subgraph }).inc();
+    void this.persister.persistTurn(message, internalIdentity, outcome, {
+      ...(subgraph ? { subgraph } : {}),
+    });
     return outcome;
   }
 
@@ -259,6 +301,38 @@ export class Pipeline implements MessageProcessor {
     }
     return graphResult.outcome ?? { action: 'ignored' };
   }
+}
+
+/**
+ * Construye el `Identity` interno desde `ResolveIdentityOutput`. Retorna
+ * `null` si falta cualquier invariante crítico (business, allia_id, profile,
+ * platform). El caller decide qué hacer: silent skip (ignored) o persistir
+ * fallback (welcome flow).
+ */
+function toInternalIdentityOrNull(
+  identity: ResolveIdentityOutput,
+  message: ChannelMessage,
+): Identity | null {
+  const businessUuid = identity.businessStaffRoles?.business_uuid;
+  const tenantAlliaId = identity.businessStaffRoles?.business_allia_id;
+  const platformId = identity.businessStaffRoles?.platform_id;
+  const profileUuid = identity.profileData.client_uuid ?? identity.profileData.staff_uuid;
+  if (!businessUuid || !tenantAlliaId || !profileUuid || platformId == null) return null;
+  return {
+    tenantUuid: businessUuid,
+    tenantAlliaId,
+    profileUuid,
+    profileType: identity.profileType,
+    platformId,
+    channel: message.channelType,
+    timezone: identity.userTimezone,
+    ...(identity.businessStaffRoles?.business_name
+      ? { tenantName: identity.businessStaffRoles.business_name }
+      : {}),
+    ...(identity.businessStaffRoles?.role_id
+      ? { roleId: identity.businessStaffRoles.role_id }
+      : {}),
+  };
 }
 
 /**

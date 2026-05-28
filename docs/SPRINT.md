@@ -226,17 +226,10 @@ Freeform_sql implementado portando IDP_OV1 sin QueryJudge ni drill-down retry (i
   `formatRowsAsDetails` cuando LLM falla. Schema cache 1h por (profileType:roleId).
 - `cannot_answer` — preguntas off-topic o no encajan, respuesta amable LLM Haiku.
 
-**Out of scope v1** (queda para iter 2 futuro):
-- `QueryJudge` — LLM extra que valida SQL+síntesis post-ejecución, fuerza retry
-  con critique. Aumenta calidad pero duplica costo LLM. Recomendable cuando
-  el subgrafo vaya a producción directo sin piloto humano-supervisado.
-- Drill-down retry — detección de imperativos cortos ("dame detalles", "con quien")
-  que heredan WHERE+rango de la consulta previa. Requiere historial conversacional.
-- Anáforas (6 turnos de history en el prompt para resolver "y la próxima?").
-- `business_hours` tool dedicada en Guacuco — workaround: cae en freeform_sql
-  o cannot_answer.
-- Cache Redis multi-instancia — schemaCache actual es in-process. OK para v1
-  single-instance.
+**Out of scope v1** (registrado en [`docs/PENDING_ITER2.md`](./PENDING_ITER2.md)):
+QueryJudge, drill-down retry, anáforas con historial, `business_hours` tool
+dedicada, cache Redis multi-instancia. Cada uno con razón concreta y trigger
+para reabrir.
 
 **Entregables**:
 - `src/graph/subgraphs/query/` con state + reducer + 3 nodos
@@ -265,19 +258,84 @@ classify + fetch + synthesize + helpers + freeform). Total suite: 544 verdes.
 
 **Objetivo**: producción.
 
-**Entregables**:
-- Fire-and-forget al final de cada turno → `POST /api/v1/conversations/agent-turns`.
-- Métricas (Sentry / Sentry Performance / dashboard interno):
-  - turnos procesados por intent clasificado
-  - subgrafo activado
-  - latencia p50/p95
-  - error rate por componente
-  - commits exitosos
-- Feature flag por `business_uuid` para routear webhook a isladeplata o IDP v2.
-- Rollout plan: 1 piloto → 5 → 20 → todos.
-- Runbook de rollback: flip flag, threads pausados quedan en checkpointer hasta TTL (24h), agente vuelve a comportamiento IDP v2 sin pérdida de datos del negocio.
+### H8.1 — Persistencia fire-and-forget ✅
 
-**DoD**: 1 negocio piloto corriendo en isladeplata 1 semana sin regresiones críticas. Comparativa side-by-side de turnos creados vs IDP v2 muestra paridad funcional.
+- `GuacucoClient.persistAgentTurns(payload)` → `POST /api/v1/conversations/agent-turns`
+  (response `{turn_id, persisted}`; idempotente server-side por `(thread_id, turn_id, role)`).
+- `ConversationPersister` (`src/pregraph/`): build payload + swallow on throw + render
+  no-text replies (cta/list/buttons) como texto plano para storage analítico.
+- `maskPII` helper (`src/security/`): enmascara teléfonos (8-15 dígitos) y emails
+  antes de persistir contenido user+assistant.
+- Pipeline step 9 (`pregraph/pipeline.ts`): `void persister.persistTurn(...)` después
+  del dispatch en welcome / rate_limited / graph paths. Cubre `subgraph` metadata
+  desde `graphResult.routing?.activeSubgraph`. Silent skip y duplicate NO persisten
+  (no hay identity completa).
+- 25 tests nuevos (6 maskPII + 9 ConversationPersister + 3 GuacucoClient + 7 pipeline).
+  Total suite: **569 verdes** (vs 544 al cierre de H7).
+
+**Pendiente para H8.2+ (futuro)**:
+- `tool_calls[]` en assistant turn — placeholder vacío. Requiere instrumentar
+  los commits de los subgrafos (schedule/confirm/cancel/reschedule) para registrar
+  qué tools se ejecutaron y su `result_status`.
+
+### H8.2 — Métricas + Sentry Performance ✅
+
+- `src/infrastructure/observability/metrics.ts`: registry prom-client con 5 counters
+  + 1 histogram, todos prefijados `isladeplata_*`:
+  - `turn_processed_total{channel, outcome_action}`
+  - `rate_limit_hit_total{channel}`
+  - `identity_not_found_total{channel}`
+  - `subgraph_entered_total{subgraph}` (incluye `welcome` para new staff)
+  - `persist_turn_total{result=ok|error}`
+  - `pipeline_latency_ms{outcome_action}` (histogram con buckets 50-20000ms)
+  - `resetMetrics()` helper para tests; NO uso productivo.
+- Endpoint `GET /metrics` (`src/infrastructure/http/metricsHandler.ts`) gated por
+  header `X-Metrics-Key` (env `METRICS_API_KEY`). Vacío → endpoint no se monta;
+  presente → 401 sin header o key incorrecta, 200 con key correcta. 404 defensivo
+  si el handler se monta con key vacía.
+- Pipeline instrumentado: counters en cada exit path, histograma observado al
+  cerrar `process()`. Sentry.startSpan envuelve `pipeline.process` (top) y
+  `pipeline.graph.invoke` (sub-span) con atributos `isladeplata.*`.
+- ConversationPersister con try/catch explícito + counter ok/error (reemplazó
+  swallowAsync — ahora el error queda contabilizado además de logueado).
+- 21 tests nuevos (8 metrics module + 4 endpoint + 7 pipeline + 2 persister).
+  Total suite: **590 verdes** (vs 569 al cierre de H8.1).
+
+### H8.3 — Cutover docs ✅ (scope reducido)
+
+Decisión usuario: **cutover directo sin rollout gradual** — todos los negocios
+van a isladeplata desde el día 1. Esto elimina la necesidad de routing dual
+(router slim, mapping phone_number_id → backend, allowlist por business). El
+rollback queda a nivel global vía revertir la callback URL de Meta a IDP v2.
+
+Entregable: [`docs/RUNBOOK_CUTOVER.md`](./RUNBOOK_CUTOVER.md) con:
+
+1. Pre-deploy checklist (repos, infra, env vars críticos H8 incluyendo
+   `LANGSMITH_HIDE_INPUTS/OUTPUTS=true` en prod, observability).
+2. Deploy + smoke test técnico (health, /metrics, webhook verify endpoint).
+3. Flip del webhook en Meta Business Manager (paso a paso, define el "punto
+   de no-retorno").
+4. Post-deploy verification (4 mensajes de smoke + baseline de métricas +
+   Sentry filter).
+5. Rollback procedure con análisis de impacto (qué se pierde de negocio vs UX).
+6. Triage table de incidentes (síntoma → dónde mirar → hipótesis comunes).
+7. Cleanup post-cutover (apagar IDP v2 a las 2 semanas estables).
+
+Algunos puntos del plan H8 original quedaron obsoletos por la decisión:
+- §3.1 routing dual (no aplica, sin router)
+- §3.2 rollout gradual fases 1→5→20→all (no aplica, full desde día 1)
+- §4 comparativa side-by-side con IDP v2 (no aplica como pipeline online;
+  el `messages` table de Guacuco P2 alimenta el post-mortem si hay incidente)
+
+### Resto del hito
+
+- **H8.4** — Cutover real + observación primeras 24h. Disparado por el primer
+  mensaje productivo que pase por isladeplata. No codeable.
+- **H8.5** — Cleanup (apagar IDP v2, archivar repo) a las 2+ semanas estables.
+
+**DoD original**: paridad funcional en piloto. Con el scope ajustado, DoD
+efectivo del hito completo H8 = isladeplata corriendo en producción >= 1 semana
+sin error rate sostenido > 5% ni latencia p95 > 5s.
 
 ---
 

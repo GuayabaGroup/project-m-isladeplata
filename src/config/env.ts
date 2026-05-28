@@ -75,6 +75,14 @@ const envSchema = z.object({
   SUPERVISOR_MODEL: z.string().default('claude-haiku-4-5-20251001'),
   /** Generación de respuestas conversacionales (social + tools). Default Haiku 4.5. */
   RESPONSE_MODEL: z.string().default('claude-haiku-4-5-20251001'),
+
+  /**
+   * Auth para el endpoint `/metrics` (H8.2). Si vacío, el endpoint NO se
+   * monta — útil para entornos donde Prometheus no se usa o queda detrás
+   * de red privada con otro mecanismo. Si presente, requests deben
+   * incluir header `X-Metrics-Key` matcheando este valor.
+   */
+  METRICS_API_KEY: z.string().default(''),
 });
 
 export type Env = z.infer<typeof envSchema>;
