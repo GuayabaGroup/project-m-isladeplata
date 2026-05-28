@@ -492,7 +492,7 @@ WhatsApp tiene un `phone_number_id` por **(plataforma, rol)** (heredado de IDP v
 - Normalizer rellena `whatsappChannel: 'staff'|'client'` en `ChannelMessage`.
 - `IdentityResolver` consulta Guacuco con `(channelType, channelId, phoneNumberId)`. El `profileType` resultante refleja el rol del phone_number_id.
 - `state.identity.profileType` viene del map + Guacuco — **NUNCA del LLM, NUNCA del payload del usuario**.
-- HMAC del webhook entrante usa `resolveAppSecret(phoneNumberId)` — el handler pre-parsea el body (untrusted) solo para extraer `phone_number_id` y elegir el secret antes de validar firma. Los datos parseados NO se usan para business logic hasta después de validar HMAC.
+- HMAC del webhook entrante: el handler pre-parsea el body (untrusted) solo para extraer `phone_number_id`, resuelve `WhatsAppPhoneConfig` y luego mira `APP_SECRET_BY_PLATFORM.get(cfg.platformId)` para elegir el secret antes de validar firma. Los datos parseados NO se usan para business logic hasta después de validar HMAC. Dev-only: `WHATSAPP_SKIP_SIGNATURE=true` saltea el HMAC (jamás en producción; el parse de `env.ts` hace fail-fast si combinás esa flag con `NODE_ENV=production`).
 
 ### 12.3 — Agnosticidad de canal
 

@@ -1,6 +1,9 @@
 import type { Request, Response } from 'express';
 import type { Logger } from 'winston';
-import { resolveAppSecret, resolveWhatsAppByPhoneNumberId } from '../../config/channels.config.js';
+import {
+  APP_SECRET_BY_PLATFORM,
+  resolveWhatsAppByPhoneNumberId,
+} from '../../config/channels.config.js';
 import { env } from '../../config/env.js';
 import { swallowAsync } from '../../infrastructure/observability/swallowAsync.js';
 import { validateWebhookSignature } from '../../security/validateWebhookSignature.js';
@@ -61,27 +64,45 @@ export function createWhatsAppWebhookHandler(deps: WhatsAppWebhookDeps): WhatsAp
         return;
       }
 
-      const appSecret = resolveAppSecret(phoneNumberId);
-      if (!appSecret) {
-        logger.warn('WhatsApp webhook: no app secret for phone_number_id', { phoneNumberId });
+      const phoneCfg = resolveWhatsAppByPhoneNumberId(phoneNumberId);
+      if (!phoneCfg) {
+        logger.warn('WhatsApp webhook: unknown phone_number_id', { phoneNumberId });
         res.status(403).end();
         return;
       }
 
-      const sigHeader = req.headers['x-hub-signature-256'];
-      const signatureHeader = Array.isArray(sigHeader) ? sigHeader[0] : sigHeader;
+      if (env.WHATSAPP_SKIP_SIGNATURE) {
+        // Dev-only path — el parse de env ya garantiza que no estamos en prod.
+        // Log warn por request para que sea ruidoso e imposible de ignorar.
+        logger.warn('WhatsApp webhook: HMAC signature validation SKIPPED (dev only)', {
+          phoneNumberId,
+        });
+      } else {
+        const appSecret = APP_SECRET_BY_PLATFORM.get(phoneCfg.platformId);
+        if (!appSecret) {
+          logger.warn('WhatsApp webhook: no app secret for platform', {
+            phoneNumberId,
+            platformId: phoneCfg.platformId,
+          });
+          res.status(403).end();
+          return;
+        }
 
-      const valid = validateWebhookSignature({
-        type: 'whatsapp',
-        rawBody,
-        signatureHeader,
-        appSecret,
-      });
+        const sigHeader = req.headers['x-hub-signature-256'];
+        const signatureHeader = Array.isArray(sigHeader) ? sigHeader[0] : sigHeader;
 
-      if (!valid) {
-        logger.warn('WhatsApp webhook: invalid HMAC signature', { phoneNumberId });
-        res.status(403).end();
-        return;
+        const valid = validateWebhookSignature({
+          type: 'whatsapp',
+          rawBody,
+          signatureHeader,
+          appSecret,
+        });
+
+        if (!valid) {
+          logger.warn('WhatsApp webhook: invalid HMAC signature', { phoneNumberId });
+          res.status(403).end();
+          return;
+        }
       }
 
       // §12.5 — responder 200 inmediato, procesar async.

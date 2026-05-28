@@ -67,13 +67,6 @@ export function resolveWhatsAppByPhoneNumberId(phoneNumberId: string): WhatsAppP
   return WHATSAPP_CHANNEL_MAP.get(phoneNumberId) ?? null;
 }
 
-/** Lookup the app secret for HMAC validation by inbound `phone_number_id`. */
-export function resolveAppSecret(phoneNumberId: string): string | null {
-  const cfg = resolveWhatsAppByPhoneNumberId(phoneNumberId);
-  if (!cfg) return null;
-  return APP_SECRET_BY_PLATFORM.get(cfg.platformId) ?? null;
-}
-
 /** Reverse lookup: from (role, platformId) → phone_number_id for outbound. */
 export function resolveWhatsAppPhoneByRole(
   role: 'staff' | 'client',

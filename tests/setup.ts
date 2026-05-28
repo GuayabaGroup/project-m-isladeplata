@@ -36,6 +36,9 @@ process.env.WHATSAPP_VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN ?? 'test-v
 process.env.WHATSAPP_GRAPH_API_VERSION = process.env.WHATSAPP_GRAPH_API_VERSION ?? 'v22.0';
 process.env.WHATSAPP_CHANNEL_MAP_JSON = process.env.WHATSAPP_CHANNEL_MAP_JSON ?? '{}';
 process.env.APP_SECRET_BY_PLATFORM_JSON = process.env.APP_SECRET_BY_PLATFORM_JSON ?? '{}';
+// Dev-only HMAC skip — default false en tests; tests específicos del skip path
+// setean `process.env.WHATSAPP_SKIP_SIGNATURE='true'` antes del import.
+process.env.WHATSAPP_SKIP_SIGNATURE = process.env.WHATSAPP_SKIP_SIGNATURE ?? 'false';
 
 // Postgres del agente (H3) — los tests no tocan Postgres real, solo necesitamos
 // que el schema env pase la validación de Zod.
