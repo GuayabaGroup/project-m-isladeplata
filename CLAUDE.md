@@ -45,8 +45,8 @@ pnpm lint:fix          # biome check --write
 - **H3.A — Checkpointer Postgres + LangSmith + grafo dummy** ✅
 - **H3.B — Supervisor LLM + tools atómicas + atajos button** ✅
 - **H3 — Grafo base + supervisor + tools atómicas** ✅
-- H4 — Subgrafo `schedule_appointment`
-- H5 — Subgrafos `confirm` + `cancel`
+- **H4 — Subgrafo `schedule_appointment`** ✅
+- **H5 — Subgrafos `confirm` + `cancel`** ✅
 - H6 — Subgrafo `reschedule` (requiere P3)
 - H7 — Subgrafo `query`
 - H8 — Persistencia turnos (P2) + cutover

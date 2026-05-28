@@ -1,9 +1,11 @@
 import type { BaseMessage } from '@langchain/core/messages';
 import { Annotation } from '@langchain/langgraph';
+import { type CatalogState, EMPTY_CATALOG } from '../core/types/Catalog.js';
 import type { ChannelMessage } from '../core/types/ChannelMessage.js';
 import { type CrmContext, EMPTY_CRM_CONTEXT } from '../core/types/CrmContext.js';
 import type { Identity } from '../core/types/Identity.js';
 import type { Outcome } from '../core/types/Outcome.js';
+import { subgraphReducerDispatch } from './subgraphs/subgraphReducer.js';
 import type { ButtonShortcut } from './supervisor/buttonShortcut.js';
 import type { ToolName } from './supervisor/filterTools.js';
 
@@ -66,6 +68,7 @@ export function mergeRouting(current: RoutingState, next: Partial<RoutingState>)
  * | input         | pre-graph adapter (inmutable durante el turno)      |
  * | identity      | pre-graph adapter (inmutable durante el turno)      |
  * | crmContext    | pre-graph adapter (carga única); nodos pueden refrescar opt-in |
+ * | catalog       | pre-graph adapter (carga única desde identity.helpersLists)    |
  * | routing       | supervisor                                          |
  * | subgraphState | el subgrafo activo                                  |
  * | outcome       | subgrafo activo al cerrar / supervisor en fast-paths |
@@ -89,12 +92,18 @@ export const GraphStateAnnotation = Annotation.Root({
     reducer: replaceWith,
     default: () => EMPTY_CRM_CONTEXT,
   }),
+  catalog: Annotation<CatalogState>({
+    reducer: replaceWith,
+    default: () => EMPTY_CATALOG,
+  }),
   routing: Annotation<RoutingState>({
     reducer: mergeRouting,
     default: () => ({}),
   }),
+  // Dispatch por `__kind` del state. Cada subgrafo (schedule, confirm, cancel,
+  // reschedule, query) declara su propio reducer; el dispatcher rutea el merge.
   subgraphState: Annotation<unknown>({
-    reducer: replaceWith,
+    reducer: subgraphReducerDispatch,
     default: () => null,
   }),
   outcome: Annotation<Outcome | null>({

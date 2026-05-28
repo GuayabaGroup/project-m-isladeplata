@@ -212,9 +212,11 @@ describe('compileGraph (supervisor wiring)', () => {
     );
   });
 
-  it('client "quiero agendar" → subgraph_placeholder (handed_off)', async () => {
+  it('client "quiero agendar" enters schedule subgraph and interrupts asking for services', async () => {
+    // 2 LLM calls expected: classifier (intent=schedule), schedule_entry (entity extraction).
     const { llm } = makeMultiReplyLlm([
       '{"messageType":"action","intent":"schedule","confidence":0.9}',
+      '{}', // entry extracts nothing actionable from this short prompt
     ]);
     const { guacuco, executeTool } = makeGuacuco();
     const graph = compileGraph({ checkpointer, logger: mockLogger, llm, guacuco });
@@ -228,11 +230,15 @@ describe('compileGraph (supervisor wiring)', () => {
         identity: IDENTITY_CLIENT,
         crmContext: EMPTY_CRM_CONTEXT,
       },
-      { configurable: { thread_id: 'th-schedule' } },
+      { configurable: { thread_id: 'th-schedule-fresh' } },
     );
 
-    expect(result.outcome?.action).toBe('handed_off');
-    expect(result.outcome?.pendingReply?.text).toMatch(/no está disponible|próximamente|humano/i);
+    // Sin catalog → ask_slot construye payload de texto pidiendo servicio.
+    const interrupts = (result as { __interrupt__?: Array<{ value: unknown }> }).__interrupt__;
+    expect(interrupts).toBeDefined();
+    expect(interrupts).toHaveLength(1);
+    const payload = interrupts?.[0]?.value as { pendingReply?: { text?: string } };
+    expect(payload?.pendingReply?.text).toMatch(/servicio/i);
     expect(executeTool).not.toHaveBeenCalled();
   });
 
