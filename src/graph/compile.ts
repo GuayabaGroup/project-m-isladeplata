@@ -133,7 +133,7 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
 
   // Schedule nodes (factory pattern: cada uno recibe deps + retorna node fn)
   const scheduleEntry = makeScheduleEntryNode({ llm, logger });
-  const scheduleResolve = makeResolveEntitiesNode({ logger });
+  const scheduleResolve = makeResolveEntitiesNode({ guacuco, logger });
   const scheduleAskSlot = makeAskSlotNode({ logger });
   const scheduleValidate = makeValidateAvailabilityNode({ guacuco, logger });
   const schedulePresent = makePresentOptionsNode({ logger });
@@ -238,7 +238,7 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
     // Schedule subgraph nodes (inlined en parent)
     .addNode('schedule_dispatch', scheduleDispatchNode)
     .addNode('schedule_entry', wrapScheduleAsync(scheduleEntry))
-    .addNode('schedule_resolve', wrapSchedule(scheduleResolve))
+    .addNode('schedule_resolve', wrapScheduleAsync(scheduleResolve))
     .addNode('schedule_ask_slot', wrapSchedule(scheduleAskSlot))
     .addNode('schedule_validate', wrapScheduleAsync(scheduleValidate))
     .addNode('schedule_present', wrapSchedule(schedulePresent))

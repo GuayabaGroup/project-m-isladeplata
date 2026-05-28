@@ -46,35 +46,31 @@ function makeState(): GraphState {
   };
 }
 
-function makeGuacuco(impl: GuacucoClient['executeTool']): GuacucoClient {
-  return { executeTool: impl } as unknown as GuacucoClient;
+function makeGuacuco(impl: GuacucoClient['retrieveManzanilloUrl']): GuacucoClient {
+  return { retrieveManzanilloUrl: impl } as unknown as GuacucoClient;
 }
 
 afterEach(() => vi.clearAllMocks());
 
 describe('retrieveManzanilloUrl tool', () => {
   it('returns CTA outcome with URL on happy path', async () => {
-    const executeTool = vi.fn(async () => ({ url: 'https://manzanillo.app/abc' }));
+    const retrieve = vi.fn(async () => ({ url: 'https://manzanillo.app/abc' }));
     const update = await retrieveManzanilloUrl.run(makeState(), {
-      guacuco: makeGuacuco(executeTool as unknown as GuacucoClient['executeTool']),
+      guacuco: makeGuacuco(retrieve as unknown as GuacucoClient['retrieveManzanilloUrl']),
       logger: mockLogger,
     });
     expect(update.outcome?.action).toBe('response');
     expect(update.outcome?.pendingReply?.cta?.url).toBe('https://manzanillo.app/abc');
     expect(update.outcome?.pendingReply?.cta?.displayText).toBe('Abrir');
-    expect(executeTool).toHaveBeenCalledWith(
-      'retrieve_manzanillo_url',
-      {},
-      { context: { profile_uuid: 'profile-abc' } },
-    );
+    expect(retrieve).toHaveBeenCalledWith(IDENTITY);
   });
 
   it('returns error outcome when Guacuco throws', async () => {
-    const executeTool = vi.fn(async () => {
+    const retrieve = vi.fn(async () => {
       throw new Error('upstream 500');
     });
     const update = await retrieveManzanilloUrl.run(makeState(), {
-      guacuco: makeGuacuco(executeTool as unknown as GuacucoClient['executeTool']),
+      guacuco: makeGuacuco(retrieve as unknown as GuacucoClient['retrieveManzanilloUrl']),
       logger: mockLogger,
     });
     expect(update.outcome?.action).toBe('error');
@@ -82,24 +78,24 @@ describe('retrieveManzanilloUrl tool', () => {
   });
 
   it('returns error outcome when result lacks url', async () => {
-    const executeTool = vi.fn(async () => ({}));
+    const retrieve = vi.fn(async () => ({}));
     const update = await retrieveManzanilloUrl.run(makeState(), {
-      guacuco: makeGuacuco(executeTool as unknown as GuacucoClient['executeTool']),
+      guacuco: makeGuacuco(retrieve as unknown as GuacucoClient['retrieveManzanilloUrl']),
       logger: mockLogger,
     });
     expect(update.outcome?.action).toBe('error');
   });
 
-  it('returns error outcome when identity is missing profileUuid', async () => {
+  it('returns error outcome when identity is missing tenantAlliaId', async () => {
     const state = makeState();
-    state.identity = { ...IDENTITY, profileUuid: '' };
-    const executeTool = vi.fn();
+    state.identity = { ...IDENTITY, tenantAlliaId: '' };
+    const retrieve = vi.fn();
     const update = await retrieveManzanilloUrl.run(state, {
-      guacuco: makeGuacuco(executeTool as unknown as GuacucoClient['executeTool']),
+      guacuco: makeGuacuco(retrieve as unknown as GuacucoClient['retrieveManzanilloUrl']),
       logger: mockLogger,
     });
     expect(update.outcome?.action).toBe('error');
-    expect(executeTool).not.toHaveBeenCalled();
+    expect(retrieve).not.toHaveBeenCalled();
   });
 
   it('declares client role only', () => {

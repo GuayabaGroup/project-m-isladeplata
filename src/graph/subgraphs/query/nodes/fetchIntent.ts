@@ -131,7 +131,7 @@ export function makeFetchIntentNode(deps: FetchIntentDeps) {
         try {
           const result = await guacuco.getStaffAppointmentsSummary(
             { date_start: today, date_end: today },
-            { profileUuid: identity.profileUuid, businessUuid: identity.tenantUuid },
+            identity,
           );
           return { rawResult: { summary: result, date: today }, phase: 'synthesizing' };
         } catch (err) {

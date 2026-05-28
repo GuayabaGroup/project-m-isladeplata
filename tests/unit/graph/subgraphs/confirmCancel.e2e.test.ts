@@ -187,6 +187,7 @@ describe('confirm E2E #1: 1 upcoming → auto-commit + success', () => {
     expect(calls.confirm).toHaveBeenCalledOnce();
     expect(calls.confirm).toHaveBeenCalledWith(
       { appointment_uuid: 'apt-1' },
+      IDENTITY,
       expect.objectContaining({ idempotencyKey: expect.any(String) }),
     );
     expect(result.outcome?.action).toBe('response');
@@ -236,7 +237,11 @@ describe('confirm E2E #3: N upcomings → ask → pick → commit', () => {
       new Command({ resume: { text: '', buttonId: 'apt_pick:apt-2' } }),
       config,
     );
-    expect(calls.confirm).toHaveBeenCalledWith({ appointment_uuid: 'apt-2' }, expect.any(Object));
+    expect(calls.confirm).toHaveBeenCalledWith(
+      { appointment_uuid: 'apt-2' },
+      IDENTITY,
+      expect.any(Object),
+    );
     expect(final.outcome?.action).toBe('response');
   });
 });
@@ -277,6 +282,7 @@ describe('cancel E2E #1: 1 upcoming → gate → confirm button → commit', () 
     expect(calls.cancel).toHaveBeenCalledOnce();
     expect(calls.cancel).toHaveBeenCalledWith(
       { appointment_uuid: 'apt-1' },
+      IDENTITY,
       expect.objectContaining({ idempotencyKey: uuid }),
     );
     expect(final.outcome?.action).toBe('response');

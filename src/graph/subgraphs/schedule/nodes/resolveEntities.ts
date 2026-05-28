@@ -1,4 +1,6 @@
 import type { Logger } from 'winston';
+import type { GuacucoClient } from '../../../../clients/GuacucoClient.js';
+import type { ProfileType } from '../../../../core/enums/ProfileType.js';
 import {
   type CatalogService,
   type CatalogStaff,
@@ -6,6 +8,7 @@ import {
   flattenStaff,
 } from '../../../../core/types/Catalog.js';
 import type { Identity } from '../../../../core/types/Identity.js';
+import { parseClientContact } from '../clientContact.js';
 import type { AppointmentDraftSlots, AppointmentDraftState, SlotState } from '../state.js';
 
 /**
@@ -20,25 +23,47 @@ import type { AppointmentDraftSlots, AppointmentDraftState, SlotState } from '..
  * - **Staff inference** (decisión §11.1 PLAN_H4): si services está resuelto a
  *   un solo servicio Y ese servicio tiene un único staff, pre-popular staff
  *   slot con status='resolved' (ahorra 1 turno).
- * - `clientUuid` (rol=staff): NO se resuelve aquí — queda en 'guessed' hasta
- *   ask_slot lo pida con texto libre (scope IN v1 sin búsqueda CRM).
+ * - `clientUuid` (rol=staff): se resuelve a un UUID real vía Guacuco
+ *   (`resolve_client`, find-or-create por teléfono). Es la ÚNICA llamada a
+ *   Guacuco autorizada desde resolve_entities — excepción documentada §9.1.3
+ *   REGLAS: el cliente NO vive en el catálogo local (`helpersLists`), así que el
+ *   fuzzy match local no aplica. Sin teléfono parseable o ante error de Guacuco,
+ *   el slot queda en 'guessed' y ask_slot vuelve a pedir el número.
  */
 
 export interface ResolveEntitiesDeps {
+  guacuco: GuacucoClient;
   logger: Logger;
 }
 
 export function makeResolveEntitiesNode(deps: ResolveEntitiesDeps) {
-  const { logger } = deps;
+  const { guacuco, logger } = deps;
 
-  return function resolveEntities(state: {
+  return async function resolveEntities(state: {
     catalog?: CatalogState;
     identity?: Identity | null;
     subgraphState?: AppointmentDraftState;
-  }): Partial<AppointmentDraftState> {
+  }): Promise<Partial<AppointmentDraftState>> {
     const current = state.subgraphState;
     if (!current) return {};
     const catalog = state.catalog ?? { services: [] };
+
+    // Guard catálogo vacío: si el negocio no tiene servicios agendables (Guacuco
+    // filtra los servicios sin staff asignado), pedir el servicio en loop no
+    // lleva a nada — el fuzzy match nunca podrá resolver y el subgrafo iteraría
+    // hasta MAX_ATTEMPTS → handoff a humano. Cerramos con un mensaje accionable
+    // según rol.
+    if (catalog.services.length === 0 && current.slots.services.status !== 'resolved') {
+      const profileType = state.identity?.profileType ?? 'client';
+      logger.info('resolveEntities: catálogo vacío, no hay servicios agendables', { profileType });
+      return {
+        phase: 'failed',
+        terminalOutcome: {
+          action: 'response',
+          pendingReply: { text: emptyCatalogReply(profileType) },
+        },
+      };
+    }
 
     const slots: AppointmentDraftSlots = { ...current.slots };
 
@@ -77,8 +102,60 @@ export function makeResolveEntitiesNode(deps: ResolveEntitiesDeps) {
       }
     }
 
+    // Client (solo rol=staff agendando para tercero). Find-or-create por teléfono
+    // vía Guacuco. Razón (§9.1.3): el cliente no está en el catálogo local.
+    if (
+      state.identity?.profileType === 'staff' &&
+      slots.clientUuid &&
+      slots.clientUuid.status === 'guessed' &&
+      slots.clientUuid.userPhrase
+    ) {
+      slots.clientUuid = await resolveClientSlot(slots.clientUuid, state.identity, guacuco, logger);
+    }
+
     return { slots };
   };
+}
+
+// ============================================================================
+// Client resolution (rol=staff) — única llamada a Guacuco desde resolve_entities
+// ============================================================================
+
+async function resolveClientSlot(
+  slot: SlotState<string>,
+  identity: Identity,
+  guacuco: GuacucoClient,
+  logger: Logger,
+): Promise<SlotState<string>> {
+  const { phone, name } = parseClientContact(slot.userPhrase ?? '');
+
+  // Sin teléfono no podemos resolver/crear → queda 'guessed' para re-preguntar.
+  if (!phone) {
+    return { ...slot, status: 'guessed' };
+  }
+
+  try {
+    const resolved = await guacuco.resolveClient(
+      {
+        business_allia_id: identity.tenantAlliaId,
+        client_phone: phone,
+        ...(name ? { client_name: name } : {}),
+      },
+      identity,
+    );
+    return {
+      value: resolved.client_uuid,
+      displayName: resolved.name,
+      userPhrase: slot.userPhrase,
+      status: 'resolved',
+    };
+  } catch (err) {
+    // Guacuco caído / error → no spineamos: dejamos 'guessed' (ask_slot re-pide).
+    logger.warn('resolveEntities: client resolution failed, keeping guessed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return { ...slot, status: 'guessed' };
+  }
 }
 
 // ============================================================================
@@ -178,4 +255,12 @@ function normalize(s: string): string {
     .normalize('NFD')
     .replace(/\p{Diacritic}/gu, '')
     .trim();
+}
+
+/** Mensaje terminal cuando el negocio no tiene servicios agendables. */
+function emptyCatalogReply(profileType: ProfileType): string {
+  if (profileType === 'staff') {
+    return 'No encontré servicios con personal asignado en tu negocio. Cargá al menos un servicio y asignale un profesional desde el panel para poder agendar turnos.';
+  }
+  return 'Por ahora no hay servicios disponibles para agendar. Probá más tarde o escribinos para más información.';
 }

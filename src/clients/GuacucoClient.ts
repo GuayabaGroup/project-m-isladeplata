@@ -1,9 +1,12 @@
 import { AxiosError } from 'axios';
+import { GUACUCO_TOOLS, type GuacucoToolName } from '../core/enums/GuacucoToolName.js';
 import { IdentityNotFoundError } from '../core/errors/IdentityNotFoundError.js';
 import { IdpError } from '../core/errors/IdpError.js';
 import { ToolExecutionError } from '../core/errors/ToolExecutionError.js';
+import type { Identity } from '../core/types/Identity.js';
 import { BaseHttpClient } from './BaseHttpClient.js';
 import { mapRawToResolveIdentityOutput } from './mappers/IdentityMapper.js';
+import { toolContextFromIdentity } from './mappers/ToolContextMapper.js';
 import type { Envelope } from './types/Envelope.js';
 import type {
   CancelAppointmentParams,
@@ -22,12 +25,16 @@ import type {
   QueryProcessorTablesResponse,
   RescheduleAppointmentParams,
   RescheduleAppointmentResult,
+  ResolveClientParams,
+  ResolveClientResult,
   ResolveIdentityInput,
   ResolveIdentityOutput,
   ScheduleAppointmentParams,
   ScheduleAppointmentResult,
+  ToolContext,
   ToolExecuteRequest,
   ToolExecuteResponse,
+  ToolUrlResult,
   ValidateRescheduleSlotParams,
   ValidateRescheduleSlotResult,
 } from './types/GuacucoTypes.js';
@@ -38,9 +45,19 @@ const QUERY_TABLES_PATH = '/api/v1/query-processor/tables';
 const QUERY_EXECUTE_PATH = '/api/v1/query-processor/query';
 const PERSIST_AGENT_TURNS_PATH = '/api/v1/conversations/agent-turns';
 
-export interface ExecuteOptions {
-  context?: Record<string, unknown>;
+/**
+ * Opciones internas de `executeTool`. El `context` siempre se construye vía
+ * `toolContextFromIdentity` dentro de los métodos tipados — los callers nunca
+ * lo arman a mano.
+ */
+interface ExecuteOptions {
+  context?: ToolContext;
   /** Opt-in idempotency for write tools (spec P1). */
+  idempotencyKey?: string;
+}
+
+/** Opciones públicas de las tools de write (idempotencia opt-in, spec P1). */
+export interface WriteToolOptions {
   idempotencyKey?: string;
 }
 
@@ -115,11 +132,14 @@ export class GuacucoClient extends BaseHttpClient {
   // ==========================================================================
 
   /**
-   * Generic tool execute. Per-tool methods below are thin wrappers that pass
-   * the correct `tool_name`. For writes, pass `idempotencyKey` (spec P1).
+   * Dispatcher genérico hacia `POST /api/v1/tools/execute`. **Interno** — los
+   * callers (commit nodes, atomic tools, subgrafos) usan los métodos tipados de
+   * abajo, que arman el `context` uniforme vía `toolContextFromIdentity` y pasan
+   * el `tool_name` desde `GUACUCO_TOOLS`. Ningún nodo del grafo arma `context` ni
+   * conoce nombres de tool (§6 REGLAS).
    */
-  async executeTool<R>(
-    toolName: string,
+  protected async executeTool<R>(
+    toolName: GuacucoToolName,
     parameters: Record<string, unknown>,
     options?: ExecuteOptions,
   ): Promise<R> {
@@ -140,41 +160,63 @@ export class GuacucoClient extends BaseHttpClient {
 
   scheduleAppointment(
     params: ScheduleAppointmentParams,
-    options?: ExecuteOptions,
+    identity: Identity,
+    options?: WriteToolOptions,
   ): Promise<ScheduleAppointmentResult> {
     return this.executeTool<ScheduleAppointmentResult>(
-      'schedule_appointment',
+      GUACUCO_TOOLS.SCHEDULE_APPOINTMENT,
       { ...params },
-      options,
+      { context: toolContextFromIdentity(identity), ...options },
     );
   }
 
   cancelAppointment(
     params: CancelAppointmentParams,
-    options?: ExecuteOptions,
+    identity: Identity,
+    options?: WriteToolOptions,
   ): Promise<CancelAppointmentResult> {
-    return this.executeTool<CancelAppointmentResult>('cancel_appointment', { ...params }, options);
+    return this.executeTool<CancelAppointmentResult>(
+      GUACUCO_TOOLS.CANCEL_APPOINTMENT,
+      { ...params },
+      { context: toolContextFromIdentity(identity), ...options },
+    );
+  }
+
+  /**
+   * Resuelve un cliente a su UUID a partir del teléfono (find-or-create). Lo usa
+   * el subgrafo schedule cuando un staff agenda para un tercero y solo conoce
+   * teléfono/nombre. Guacuco aplica el guard cross-business contra
+   * `context.business_uuid` (write → BUSINESS_MISMATCH si no coincide).
+   */
+  resolveClient(params: ResolveClientParams, identity: Identity): Promise<ResolveClientResult> {
+    return this.executeTool<ResolveClientResult>(
+      GUACUCO_TOOLS.RESOLVE_CLIENT,
+      { ...params },
+      { context: toolContextFromIdentity(identity) },
+    );
   }
 
   rescheduleAppointment(
     params: RescheduleAppointmentParams,
-    options?: ExecuteOptions,
+    identity: Identity,
+    options?: WriteToolOptions,
   ): Promise<RescheduleAppointmentResult> {
     return this.executeTool<RescheduleAppointmentResult>(
-      'reschedule_appointment',
+      GUACUCO_TOOLS.RESCHEDULE_APPOINTMENT,
       { ...params },
-      options,
+      { context: toolContextFromIdentity(identity), ...options },
     );
   }
 
   confirmAppointment(
     params: ConfirmAppointmentParams,
-    options?: ExecuteOptions,
+    identity: Identity,
+    options?: WriteToolOptions,
   ): Promise<ConfirmAppointmentResult> {
     return this.executeTool<ConfirmAppointmentResult>(
-      'confirm_appointment',
+      GUACUCO_TOOLS.CONFIRM_APPOINTMENT,
       { ...params },
-      options,
+      { context: toolContextFromIdentity(identity), ...options },
     );
   }
 
@@ -188,16 +230,23 @@ export class GuacucoClient extends BaseHttpClient {
    *
    * Es el único path para pre-validar un slot de schedule_appointment —
    * Guacuco no expone un `/tools/validate` separado; toda validación va por
-   * executeTool con el handler correspondiente.
+   * executeTool con el handler correspondiente. Read-only.
    */
-  checkAvailability(params: CheckAvailabilityParams): Promise<CheckAvailabilityResult> {
-    return this.executeTool<CheckAvailabilityResult>('check_availability', { ...params });
+  checkAvailability(
+    params: CheckAvailabilityParams,
+    identity: Identity,
+  ): Promise<CheckAvailabilityResult> {
+    return this.executeTool<CheckAvailabilityResult>(
+      GUACUCO_TOOLS.CHECK_AVAILABILITY,
+      { ...params },
+      { context: toolContextFromIdentity(identity) },
+    );
   }
 
   /**
    * Resumen de turnos del staff en un rango de fechas (max 31 días). Solo
-   * staff role; Guacuco valida ownership via `context.profileUuid` +
-   * `context.businessUuid` (los pasa el caller como ExecuteOptions.context).
+   * staff role; Guacuco valida ownership via `context.profile_uuid` +
+   * `context.business_uuid` (vienen del context uniforme).
    *
    * Devuelve `summary` pre-formateado por Guacuco + array de appointments
    * sin PII de cliente más allá del nombre. Si `date_end` se omite, Guacuco
@@ -205,18 +254,12 @@ export class GuacucoClient extends BaseHttpClient {
    */
   getStaffAppointmentsSummary(
     params: GetStaffAppointmentsSummaryParams,
-    options: { profileUuid: string; businessUuid: string },
+    identity: Identity,
   ): Promise<GetStaffAppointmentsSummaryResult> {
     return this.executeTool<GetStaffAppointmentsSummaryResult>(
-      'get_staff_appointments_summary',
+      GUACUCO_TOOLS.GET_STAFF_APPOINTMENTS_SUMMARY,
       { ...params },
-      {
-        context: {
-          profile_uuid: options.profileUuid,
-          business_uuid: options.businessUuid,
-          profile_type: 'staff',
-        },
-      },
+      { context: toolContextFromIdentity(identity) },
     );
   }
 
@@ -230,10 +273,70 @@ export class GuacucoClient extends BaseHttpClient {
    */
   validateRescheduleSlot(
     params: ValidateRescheduleSlotParams,
+    identity: Identity,
   ): Promise<ValidateRescheduleSlotResult> {
-    return this.executeTool<ValidateRescheduleSlotResult>('validate_reschedule_slot', {
-      ...params,
-    });
+    return this.executeTool<ValidateRescheduleSlotResult>(
+      GUACUCO_TOOLS.VALIDATE_RESCHEDULE_SLOT,
+      { ...params },
+      { context: toolContextFromIdentity(identity) },
+    );
+  }
+
+  // ==========================================================================
+  // Atomic tools (sistema / support) — link generation + forward
+  // ==========================================================================
+
+  /**
+   * Link público de booking (Manzanillo / front de cliente por plataforma).
+   * Guacuco lee `parameters.business_allia_id` y aplica el guard cross-business
+   * contra `context.business_uuid`.
+   */
+  retrieveManzanilloUrl(identity: Identity): Promise<ToolUrlResult> {
+    return this.executeTool<ToolUrlResult>(
+      GUACUCO_TOOLS.RETRIEVE_MANZANILLO_URL,
+      { business_allia_id: identity.tenantAlliaId },
+      { context: toolContextFromIdentity(identity) },
+    );
+  }
+
+  /**
+   * Link de verificación / acceso al panel. Guacuco lee `parameters.profile_uuid`
+   * (el staff sujeto) y guarda contra `context.business_uuid`.
+   */
+  generateVerificationUrl(identity: Identity): Promise<ToolUrlResult> {
+    return this.executeTool<ToolUrlResult>(
+      GUACUCO_TOOLS.GENERATE_VERIFICATION_URL,
+      { profile_uuid: identity.profileUuid },
+      { context: toolContextFromIdentity(identity) },
+    );
+  }
+
+  /**
+   * Inicia el OAuth de Mercado Pago para el staff. Guacuco lee
+   * `parameters.profile_uuid` y guarda contra `context.business_uuid`.
+   */
+  connectMercadoPago(identity: Identity): Promise<ToolUrlResult> {
+    return this.executeTool<ToolUrlResult>(
+      GUACUCO_TOOLS.CONNECT_MERCADO_PAGO,
+      { profile_uuid: identity.profileUuid },
+      { context: toolContextFromIdentity(identity) },
+    );
+  }
+
+  /**
+   * Reenvía un mensaje del usuario al negocio.
+   *
+   * ⚠️ Pendiente backend: Guacuco NO expone hoy un handler `forward_message`
+   * (ver requerimiento `--g`). La llamada queda estandarizada del lado de IDP
+   * pero retornará error hasta que el handler exista. No usar en producción
+   * hasta entonces.
+   */
+  forwardMessage(originalMessage: string, identity: Identity): Promise<unknown> {
+    return this.executeTool<unknown>(
+      GUACUCO_TOOLS.FORWARD_MESSAGE,
+      { original_message: originalMessage },
+      { context: toolContextFromIdentity(identity) },
+    );
   }
 
   // ==========================================================================

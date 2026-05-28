@@ -1,3 +1,5 @@
+import type { ProfileType } from '../../core/enums/ProfileType.js';
+
 // ============================================================================
 // Identity resolve — GET /api/v1/identity/resolve (snake_case query params)
 // ============================================================================
@@ -112,10 +114,27 @@ export interface ResolveIdentityOutput {
 // Tool execute — POST /api/v1/tools/execute
 // ============================================================================
 
+/**
+ * Sobre de identidad canónico enviado en `context` de TODA tool execute.
+ * Matchea exactamente las keys que Guacuco lee en `ToolMapper.toExecuteToolInput`
+ * (`profile_uuid`, `profile_type`, `business_uuid`, `role_id`). Guacuco lo usa
+ * como guard cross-business. Se construye SIEMPRE vía `toolContextFromIdentity`.
+ *
+ * `business_allia_id` NO va acá — Guacuco no lo lee de `context`; es un
+ * `parameter` en las tools que lo requieren (schedule, check_availability,
+ * resolve_client, retrieve_manzanillo_url).
+ */
+export interface ToolContext {
+  profile_uuid: string;
+  profile_type: ProfileType;
+  business_uuid: string;
+  role_id?: number;
+}
+
 export interface ToolExecuteRequest {
   tool_name: string;
   parameters: Record<string, unknown>;
-  context?: Record<string, unknown>;
+  context?: ToolContext;
   /** Opt-in idempotency (spec P1). Only honored for write tools. */
   idempotency_key?: string;
 }
@@ -123,6 +142,17 @@ export interface ToolExecuteRequest {
 export interface ToolExecuteResponse<R = unknown> {
   tool_name: string;
   result: R;
+}
+
+/**
+ * Resultado común de las tools de sistema que devuelven un link
+ * (retrieve_manzanillo_url, generate_verification_url, connect_mercado_pago).
+ * Las atomic tools sólo consumen `url`.
+ */
+export interface ToolUrlResult {
+  url: string;
+  response_type?: string;
+  message?: string;
 }
 
 // ============================================================================
@@ -142,6 +172,20 @@ export interface ScheduleAppointmentParams {
   client_uuid: string;
   staff_uuid: string;
   service_uuids: string[];
+}
+
+// resolve_client (find-or-create cliente por teléfono — usado cuando el staff
+// agenda para un tercero y solo conoce teléfono/nombre, no el UUID).
+
+export interface ResolveClientParams {
+  business_allia_id: string;
+  client_phone: string;
+  client_name?: string;
+}
+
+export interface ResolveClientResult {
+  client_uuid: string;
+  name: string;
 }
 
 export interface StaffAssignment {

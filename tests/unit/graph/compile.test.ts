@@ -33,6 +33,7 @@ const IDENTITY_STAFF: Identity = {
   ...IDENTITY_CLIENT,
   profileUuid: 'profile-staff',
   profileType: 'staff',
+  roleId: 1, // owner — habilita tools owner-only (connect_mercado_pago)
 };
 
 function makeMessage(
@@ -114,13 +115,20 @@ function makeMultiReplyLlm(replies: string[]): {
   return { llm, create };
 }
 
-function makeGuacuco(impl?: GuacucoClient['executeTool']): {
+function makeGuacuco(overrides?: Partial<Record<keyof GuacucoClient, unknown>>): {
   guacuco: GuacucoClient;
-  executeTool: ReturnType<typeof vi.fn>;
+  retrieveManzanilloUrl: ReturnType<typeof vi.fn>;
+  connectMercadoPago: ReturnType<typeof vi.fn>;
 } {
-  const executeTool = vi.fn(impl ?? (async () => ({})));
-  const guacuco = { executeTool } as unknown as GuacucoClient;
-  return { guacuco, executeTool };
+  const retrieveManzanilloUrl = vi.fn(
+    (overrides?.retrieveManzanilloUrl as GuacucoClient['retrieveManzanilloUrl']) ??
+      (async () => ({})),
+  );
+  const connectMercadoPago = vi.fn(
+    (overrides?.connectMercadoPago as GuacucoClient['connectMercadoPago']) ?? (async () => ({})),
+  );
+  const guacuco = { retrieveManzanilloUrl, connectMercadoPago } as unknown as GuacucoClient;
+  return { guacuco, retrieveManzanilloUrl, connectMercadoPago };
 }
 
 let checkpointer: MemorySaver;
@@ -139,7 +147,7 @@ describe('compileGraph (supervisor wiring)', () => {
       '{"messageType":"greeting","confidence":0.95}', // classifier
       '¡Hola! ¿En qué te puedo ayudar?', // social responder
     ]);
-    const { guacuco, executeTool } = makeGuacuco();
+    const { guacuco, retrieveManzanilloUrl, connectMercadoPago } = makeGuacuco();
     const graph = compileGraph({ checkpointer, logger: mockLogger, llm, guacuco });
 
     const result = await graph.invoke(
@@ -153,14 +161,15 @@ describe('compileGraph (supervisor wiring)', () => {
 
     expect(result.outcome?.action).toBe('response');
     expect(result.outcome?.pendingReply?.text).toContain('Hola');
-    expect(executeTool).not.toHaveBeenCalled();
+    expect(retrieveManzanilloUrl).not.toHaveBeenCalled();
+    expect(connectMercadoPago).not.toHaveBeenCalled();
   });
 
   it('client "quiero el link" → retrieve_manzanillo_url tool', async () => {
     const { llm } = makeLlmStub('{"messageType":"action","intent":"unknown","confidence":0.6}');
-    const { guacuco, executeTool } = makeGuacuco((async () => ({
-      url: 'https://manzanillo.app/abc',
-    })) as unknown as GuacucoClient['executeTool']);
+    const { guacuco, retrieveManzanilloUrl } = makeGuacuco({
+      retrieveManzanilloUrl: async () => ({ url: 'https://manzanillo.app/abc' }),
+    });
     const graph = compileGraph({ checkpointer, logger: mockLogger, llm, guacuco });
 
     const result = await graph.invoke(
@@ -177,18 +186,14 @@ describe('compileGraph (supervisor wiring)', () => {
 
     expect(result.outcome?.action).toBe('response');
     expect(result.outcome?.pendingReply?.cta?.url).toBe('https://manzanillo.app/abc');
-    expect(executeTool).toHaveBeenCalledWith(
-      'retrieve_manzanillo_url',
-      {},
-      { context: { profile_uuid: 'profile-client' } },
-    );
+    expect(retrieveManzanilloUrl).toHaveBeenCalledWith(IDENTITY_CLIENT);
   });
 
   it('staff "conectar mercadopago" → connect_mercado_pago tool', async () => {
     const { llm } = makeLlmStub('{"messageType":"action","intent":"unknown","confidence":0.6}');
-    const { guacuco, executeTool } = makeGuacuco((async () => ({
-      url: 'https://mp.example/connect',
-    })) as unknown as GuacucoClient['executeTool']);
+    const { guacuco, connectMercadoPago } = makeGuacuco({
+      connectMercadoPago: async () => ({ url: 'https://mp.example/connect' }),
+    });
     const graph = compileGraph({ checkpointer, logger: mockLogger, llm, guacuco });
 
     const result = await graph.invoke(
@@ -205,20 +210,16 @@ describe('compileGraph (supervisor wiring)', () => {
 
     expect(result.outcome?.action).toBe('response');
     expect(result.outcome?.pendingReply?.cta?.displayText).toBe('Conectar');
-    expect(executeTool).toHaveBeenCalledWith(
-      'connect_mercado_pago',
-      {},
-      { context: { business_allia_id: 'allia-1' } },
-    );
+    expect(connectMercadoPago).toHaveBeenCalledWith(IDENTITY_STAFF);
   });
 
-  it('client "quiero agendar" enters schedule subgraph and interrupts asking for services', async () => {
+  it('client "quiero agendar" with empty catalog terminates with actionable message (no loop)', async () => {
     // 2 LLM calls expected: classifier (intent=schedule), schedule_entry (entity extraction).
     const { llm } = makeMultiReplyLlm([
       '{"messageType":"action","intent":"schedule","confidence":0.9}',
       '{}', // entry extracts nothing actionable from this short prompt
     ]);
-    const { guacuco, executeTool } = makeGuacuco();
+    const { guacuco, retrieveManzanilloUrl, connectMercadoPago } = makeGuacuco();
     const graph = compileGraph({ checkpointer, logger: mockLogger, llm, guacuco });
 
     const result = await graph.invoke(
@@ -233,13 +234,14 @@ describe('compileGraph (supervisor wiring)', () => {
       { configurable: { thread_id: 'th-schedule-fresh' } },
     );
 
-    // Sin catalog → ask_slot construye payload de texto pidiendo servicio.
+    // Sin catalog (negocio sin servicios agendables) → resolveEntities corta el
+    // loop con un mensaje accionable en vez de preguntar servicio indefinidamente.
     const interrupts = (result as { __interrupt__?: Array<{ value: unknown }> }).__interrupt__;
-    expect(interrupts).toBeDefined();
-    expect(interrupts).toHaveLength(1);
-    const payload = interrupts?.[0]?.value as { pendingReply?: { text?: string } };
-    expect(payload?.pendingReply?.text).toMatch(/servicio/i);
-    expect(executeTool).not.toHaveBeenCalled();
+    expect(interrupts).toBeUndefined();
+    expect(result.outcome?.action).toBe('response');
+    expect(result.outcome?.pendingReply?.text).toMatch(/no hay servicios disponibles/i);
+    expect(retrieveManzanilloUrl).not.toHaveBeenCalled();
+    expect(connectMercadoPago).not.toHaveBeenCalled();
   });
 
   it('button payload confirm:<uuid> → subgraph_placeholder (no LLM call)', async () => {

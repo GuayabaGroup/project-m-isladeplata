@@ -71,12 +71,15 @@ export function makeRescheduleValidateNode(deps: RescheduleValidateDeps) {
 
     let result: ValidateRescheduleSlotResult;
     try {
-      result = await guacuco.validateRescheduleSlot({
-        appointment_uuid: appointmentUuid.value,
-        profile_uuid: identity.profileUuid,
-        date_hint: [newDate.value],
-        time_hint: newTime.value,
-      });
+      result = await guacuco.validateRescheduleSlot(
+        {
+          appointment_uuid: appointmentUuid.value,
+          profile_uuid: identity.profileUuid,
+          date_hint: [newDate.value],
+          time_hint: newTime.value,
+        },
+        identity,
+      );
     } catch (err) {
       logger.warn('reschedule.validate: Guacuco call failed', {
         error: err instanceof Error ? err.message : String(err),

@@ -22,6 +22,16 @@ const logger = {
   debug: vi.fn(),
 } as unknown as Logger;
 
+const IDENTITY: Identity = {
+  tenantUuid: 'biz-1',
+  tenantAlliaId: 'allia-1',
+  profileUuid: 'profile-1',
+  profileType: 'client',
+  platformId: 3,
+  channel: 'whatsapp',
+  timezone: 'America/Argentina/Buenos_Aires',
+};
+
 function readyDraft(): ConfirmDraftState {
   const d = initialConfirmDraftState();
   d.slots.appointmentUuid = { value: 'apt-1', displayName: 'Corte', status: 'resolved' };
@@ -74,7 +84,7 @@ describe('commit registra tool_calls', () => {
       })),
       logger,
     });
-    const out = await node({ subgraphState: readyDraft() });
+    const out = await node({ identity: IDENTITY, subgraphState: readyDraft() });
     expect(out.phase).toBe('done');
     expect(out.meta?.toolCalls).toEqual([
       { toolName: 'confirm_appointment', input: { appointment_uuid: 'apt-1' }, resultStatus: 'ok' },
@@ -88,7 +98,7 @@ describe('commit registra tool_calls', () => {
       }),
       logger,
     });
-    const out = await node({ subgraphState: readyDraft() });
+    const out = await node({ identity: IDENTITY, subgraphState: readyDraft() });
     expect(out.phase).toBe('failed');
     expect(out.meta?.toolCalls).toEqual([
       {

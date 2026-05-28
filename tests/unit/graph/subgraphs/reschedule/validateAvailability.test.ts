@@ -72,12 +72,15 @@ describe('reschedule.validate — passed=true', () => {
     const guacuco = makeGuacuco(fn);
     const node = makeRescheduleValidateNode({ guacuco, logger: mockLogger });
     await node({ identity: IDENTITY, subgraphState: readyDraft() });
-    expect(fn).toHaveBeenCalledWith({
-      appointment_uuid: 'apt-1',
-      profile_uuid: 'profile-1',
-      date_hint: ['2026-06-05'],
-      time_hint: '14:00',
-    });
+    expect(fn).toHaveBeenCalledWith(
+      {
+        appointment_uuid: 'apt-1',
+        profile_uuid: 'profile-1',
+        date_hint: ['2026-06-05'],
+        time_hint: '14:00',
+      },
+      IDENTITY,
+    );
   });
 });
 

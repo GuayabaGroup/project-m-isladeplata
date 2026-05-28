@@ -46,27 +46,28 @@ function makeState(profileType: Identity['profileType'] = 'client'): GraphState 
   };
 }
 
-function makeGuacuco(impl: GuacucoClient['executeTool']): GuacucoClient {
-  return { executeTool: impl } as unknown as GuacucoClient;
+function makeGuacuco(impl: GuacucoClient['generateVerificationUrl']): GuacucoClient {
+  return { generateVerificationUrl: impl } as unknown as GuacucoClient;
 }
 
 afterEach(() => vi.clearAllMocks());
 
 describe('generateVerificationUrl tool', () => {
   it('returns CTA outcome for client', async () => {
-    const executeTool = vi.fn(async () => ({ url: 'https://verify.app/abc' }));
+    const generate = vi.fn(async () => ({ url: 'https://verify.app/abc' }));
     const update = await generateVerificationUrl.run(makeState('client'), {
-      guacuco: makeGuacuco(executeTool as unknown as GuacucoClient['executeTool']),
+      guacuco: makeGuacuco(generate as unknown as GuacucoClient['generateVerificationUrl']),
       logger: mockLogger,
     });
     expect(update.outcome?.pendingReply?.cta?.url).toBe('https://verify.app/abc');
     expect(update.outcome?.pendingReply?.cta?.displayText).toBe('Verificar');
+    expect(generate).toHaveBeenCalledWith({ ...IDENTITY, profileType: 'client' });
   });
 
   it('works for staff role too (allowedRoles includes both)', async () => {
-    const executeTool = vi.fn(async () => ({ url: 'https://verify.app/staff' }));
+    const generate = vi.fn(async () => ({ url: 'https://verify.app/staff' }));
     const update = await generateVerificationUrl.run(makeState('staff'), {
-      guacuco: makeGuacuco(executeTool as unknown as GuacucoClient['executeTool']),
+      guacuco: makeGuacuco(generate as unknown as GuacucoClient['generateVerificationUrl']),
       logger: mockLogger,
     });
     expect(update.outcome?.action).toBe('response');
@@ -77,11 +78,11 @@ describe('generateVerificationUrl tool', () => {
   });
 
   it('returns error on backend failure', async () => {
-    const executeTool = vi.fn(async () => {
+    const generate = vi.fn(async () => {
       throw new Error('upstream');
     });
     const update = await generateVerificationUrl.run(makeState(), {
-      guacuco: makeGuacuco(executeTool as unknown as GuacucoClient['executeTool']),
+      guacuco: makeGuacuco(generate as unknown as GuacucoClient['generateVerificationUrl']),
       logger: mockLogger,
     });
     expect(update.outcome?.action).toBe('error');

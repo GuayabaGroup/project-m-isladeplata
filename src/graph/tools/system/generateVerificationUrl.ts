@@ -2,10 +2,6 @@ import type { Outcome } from '../../../core/types/Outcome.js';
 import type { GraphState, GraphStateUpdate } from '../../state.js';
 import type { AtomicTool, ToolDeps } from '../Tool.js';
 
-interface VerificationUrlResult {
-  url: string;
-}
-
 const ERROR_OUTCOME: Outcome = {
   action: 'error',
   pendingReply: {
@@ -18,18 +14,14 @@ export const generateVerificationUrl: AtomicTool = {
   allowedRoles: ['client', 'staff'],
 
   async run(state: GraphState, deps: ToolDeps): Promise<GraphStateUpdate> {
-    const profileUuid = state.identity?.profileUuid;
-    if (!profileUuid) {
+    const identity = state.identity;
+    if (!identity?.profileUuid) {
       deps.logger.warn('generateVerificationUrl: missing profileUuid in identity');
       return { outcome: ERROR_OUTCOME };
     }
 
     try {
-      const result = await deps.guacuco.executeTool<VerificationUrlResult>(
-        'generate_verification_url',
-        {},
-        { context: { profile_uuid: profileUuid } },
-      );
+      const result = await deps.guacuco.generateVerificationUrl(identity);
 
       if (!result?.url) {
         deps.logger.warn('generateVerificationUrl: empty URL from Guacuco');

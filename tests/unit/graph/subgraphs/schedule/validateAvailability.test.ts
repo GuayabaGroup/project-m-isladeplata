@@ -79,13 +79,16 @@ describe('validateAvailability — happy path', () => {
     const node = makeValidateAvailabilityNode({ guacuco, logger: mockLogger });
 
     await node({ identity: IDENTITY, subgraphState: makeReadyDraft() });
-    expect(fn).toHaveBeenCalledWith({
-      business_allia_id: 'allia-1',
-      staff_uuid: 'stf-maria',
-      service_uuids: ['svc-corte'],
-      date: '2026-05-28',
-      appointment_time: '16:00',
-    });
+    expect(fn).toHaveBeenCalledWith(
+      {
+        business_allia_id: 'allia-1',
+        staff_uuid: 'stf-maria',
+        service_uuids: ['svc-corte'],
+        date: '2026-05-28',
+        appointment_time: '16:00',
+      },
+      IDENTITY,
+    );
   });
 });
 

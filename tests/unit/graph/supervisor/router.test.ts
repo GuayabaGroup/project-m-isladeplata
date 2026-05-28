@@ -19,7 +19,8 @@ const IDENTITY_CLIENT: Identity = {
   channel: 'whatsapp',
   timezone: 'America/Argentina/Buenos_Aires',
 };
-const IDENTITY_STAFF: Identity = { ...IDENTITY_CLIENT, profileType: 'staff' };
+const IDENTITY_STAFF_OWNER: Identity = { ...IDENTITY_CLIENT, profileType: 'staff', roleId: 1 };
+const IDENTITY_STAFF_EMPLOYEE: Identity = { ...IDENTITY_CLIENT, profileType: 'staff', roleId: 2 };
 
 function makeState(routing: RoutingState, identity: Identity = IDENTITY_CLIENT): GraphState {
   const message: ChannelMessage = {
@@ -114,7 +115,7 @@ describe('routeFromSupervisor', () => {
     ).toBe('social_responder');
   });
 
-  it('staff with connect_mercado_pago → tool_connect_mercado_pago', () => {
+  it('owner staff with connect_mercado_pago → tool_connect_mercado_pago', () => {
     expect(
       routeFromSupervisor(
         makeState(
@@ -124,10 +125,26 @@ describe('routeFromSupervisor', () => {
             confidence: 0.6,
             targetTool: 'connect_mercado_pago',
           },
-          IDENTITY_STAFF,
+          IDENTITY_STAFF_OWNER,
         ),
       ),
     ).toBe('tool_connect_mercado_pago');
+  });
+
+  it('non-owner staff with connect_mercado_pago → social fallback (owner-only tool hidden)', () => {
+    expect(
+      routeFromSupervisor(
+        makeState(
+          {
+            messageType: 'action',
+            intent: 'unknown',
+            confidence: 0.6,
+            targetTool: 'connect_mercado_pago',
+          },
+          IDENTITY_STAFF_EMPLOYEE,
+        ),
+      ),
+    ).toBe('social_responder');
   });
 
   it('query → subgraph_placeholder', () => {

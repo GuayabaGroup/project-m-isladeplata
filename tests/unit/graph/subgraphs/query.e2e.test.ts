@@ -245,12 +245,9 @@ describe('query E2E #3: staff_schedule_day (staff)', () => {
       { configurable: { thread_id: 'q-3' } },
     );
     expect(calls.staffSummary).toHaveBeenCalledOnce();
-    const [params, options] = calls.staffSummary.mock.calls[0] ?? [];
+    const [params, identity] = calls.staffSummary.mock.calls[0] ?? [];
     expect((params as { date_start: string }).date_start).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    expect(options).toMatchObject({
-      profileUuid: 'profile-staff',
-      businessUuid: 'biz-1',
-    });
+    expect(identity).toEqual(IDENTITY_STAFF);
     expect(result.outcome?.action).toBe('response');
     expect(result.outcome?.pendingReply?.text).toMatch(/10:00|14:00/);
   });

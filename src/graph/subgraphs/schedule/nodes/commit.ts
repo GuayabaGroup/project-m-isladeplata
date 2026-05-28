@@ -1,6 +1,7 @@
 import type { Logger } from 'winston';
 import type { GuacucoClient } from '../../../../clients/GuacucoClient.js';
 import type { ScheduleAppointmentResult } from '../../../../clients/types/GuacucoTypes.js';
+import { GUACUCO_TOOLS } from '../../../../core/enums/GuacucoToolName.js';
 import { ToolExecutionError } from '../../../../core/errors/ToolExecutionError.js';
 import type { Identity } from '../../../../core/types/Identity.js';
 import type { Outcome } from '../../../../core/types/Outcome.js';
@@ -8,7 +9,7 @@ import { toolCallErrorCode, withToolCall } from '../../common/state.js';
 import { assertSlotsResolved } from '../assertions.js';
 import type { AppointmentDraftState } from '../state.js';
 
-const TOOL_NAME = 'schedule_appointment';
+const TOOL_NAME = GUACUCO_TOOLS.SCHEDULE_APPOINTMENT;
 
 /**
  * Nodo `commit`: ejecuta el side effect en Guacuco (`scheduleAppointment`)
@@ -34,8 +35,9 @@ const TOOL_NAME = 'schedule_appointment';
  * - Errores de red / Error genérico: terminalOutcome=error.
  *
  * Identity dual (staff agendando para tercero): requiere `slots.clientUuid.value`
- * (UUID literal). En v1 ese slot llega con `userPhrase` (texto libre) sin
- * `value` → handed_off documentado.
+ * (UUID literal). `resolveEntities` lo resuelve vía Guacuco (find-or-create por
+ * teléfono) antes de llegar acá. Si aun así no hay `value` (ej. Guacuco caído de
+ * forma persistente), este nodo cierra con handed_off — red de seguridad.
  */
 
 export interface CommitDeps {
@@ -113,7 +115,7 @@ export function makeCommitNode(deps: CommitDeps) {
 
     let result: ScheduleAppointmentResult;
     try {
-      result = await guacuco.scheduleAppointment(params, { idempotencyKey: intentUuid });
+      result = await guacuco.scheduleAppointment(params, identity, { idempotencyKey: intentUuid });
     } catch (err) {
       const code = toolCallErrorCode(err);
       return withToolCall(handleCommitError(err, current, logger), {

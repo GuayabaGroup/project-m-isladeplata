@@ -46,50 +46,46 @@ function makeState(): GraphState {
   };
 }
 
-function makeGuacuco(impl: GuacucoClient['executeTool']): GuacucoClient {
-  return { executeTool: impl } as unknown as GuacucoClient;
+function makeGuacuco(impl: GuacucoClient['connectMercadoPago']): GuacucoClient {
+  return { connectMercadoPago: impl } as unknown as GuacucoClient;
 }
 
 afterEach(() => vi.clearAllMocks());
 
 describe('connectMercadoPago tool', () => {
   it('returns CTA with connect URL on happy path', async () => {
-    const executeTool = vi.fn(async () => ({ url: 'https://mp.example/oauth/abc' }));
+    const connect = vi.fn(async () => ({ url: 'https://mp.example/oauth/abc' }));
     const update = await connectMercadoPago.run(makeState(), {
-      guacuco: makeGuacuco(executeTool as unknown as GuacucoClient['executeTool']),
+      guacuco: makeGuacuco(connect as unknown as GuacucoClient['connectMercadoPago']),
       logger: mockLogger,
     });
     expect(update.outcome?.action).toBe('response');
     expect(update.outcome?.pendingReply?.cta?.displayText).toBe('Conectar');
-    expect(executeTool).toHaveBeenCalledWith(
-      'connect_mercado_pago',
-      {},
-      { context: { business_allia_id: 'allia-1' } },
-    );
+    expect(connect).toHaveBeenCalledWith(IDENTITY_STAFF);
   });
 
   it('declares staff role only', () => {
     expect(connectMercadoPago.allowedRoles).toEqual(['staff']);
   });
 
-  it('returns error when tenantAlliaId missing', async () => {
+  it('returns error when profileUuid missing', async () => {
     const state = makeState();
-    state.identity = { ...IDENTITY_STAFF, tenantAlliaId: '' };
-    const executeTool = vi.fn();
+    state.identity = { ...IDENTITY_STAFF, profileUuid: '' };
+    const connect = vi.fn();
     const update = await connectMercadoPago.run(state, {
-      guacuco: makeGuacuco(executeTool as unknown as GuacucoClient['executeTool']),
+      guacuco: makeGuacuco(connect as unknown as GuacucoClient['connectMercadoPago']),
       logger: mockLogger,
     });
     expect(update.outcome?.action).toBe('error');
-    expect(executeTool).not.toHaveBeenCalled();
+    expect(connect).not.toHaveBeenCalled();
   });
 
   it('returns error on backend failure', async () => {
-    const executeTool = vi.fn(async () => {
+    const connect = vi.fn(async () => {
       throw new Error('upstream');
     });
     const update = await connectMercadoPago.run(makeState(), {
-      guacuco: makeGuacuco(executeTool as unknown as GuacucoClient['executeTool']),
+      guacuco: makeGuacuco(connect as unknown as GuacucoClient['connectMercadoPago']),
       logger: mockLogger,
     });
     expect(update.outcome?.action).toBe('error');

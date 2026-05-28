@@ -280,13 +280,10 @@ describe('query.fetchIntent — staff_schedule_day', () => {
     });
     expect(update.phase).toBe('synthesizing');
     expect(call).toHaveBeenCalledOnce();
-    const [params, options] = call.mock.calls[0] ?? [];
+    const [params, identity] = call.mock.calls[0] ?? [];
     expect(params).toMatchObject({ date_start: expect.any(String) });
     expect((params as { date_start: string }).date_start).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    expect(options).toEqual({
-      profileUuid: 'profile-staff',
-      businessUuid: 'biz-1',
-    });
+    expect(identity).toEqual(IDENTITY_STAFF);
   });
 
   it('client role: rejects with FORBIDDEN outcome, no Guacuco call', async () => {

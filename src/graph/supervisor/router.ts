@@ -30,8 +30,9 @@ const LOW_CONFIDENCE_THRESHOLD = 0.5;
 
 export function routeFromSupervisor(state: GraphState): RouterDestination {
   const routing = state.routing ?? {};
-  const profileType = state.identity?.profileType ?? 'client';
-  const allowed = getAvailableTools(profileType);
+  const identity = state.identity;
+  const profileType = identity?.profileType ?? 'client';
+  const allowed = getAvailableTools(profileType, identity?.roleId, identity?.platformId);
 
   // 1. Atajo button — prioridad absoluta.
   if (routing.buttonShortcut) {

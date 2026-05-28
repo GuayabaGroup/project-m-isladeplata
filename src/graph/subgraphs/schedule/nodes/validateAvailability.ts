@@ -84,13 +84,16 @@ export function makeValidateAvailabilityNode(deps: ValidateAvailabilityDeps) {
 
     let result: CheckAvailabilityResult;
     try {
-      result = await guacuco.checkAvailability({
-        business_allia_id: identity.tenantAlliaId,
-        staff_uuid: staff.value,
-        service_uuids: services.value,
-        date: date.value,
-        appointment_time: time.value,
-      });
+      result = await guacuco.checkAvailability(
+        {
+          business_allia_id: identity.tenantAlliaId,
+          staff_uuid: staff.value,
+          service_uuids: services.value,
+          date: date.value,
+          appointment_time: time.value,
+        },
+        identity,
+      );
     } catch (err) {
       logger.warn('validateAvailability: Guacuco call failed', {
         error: err instanceof Error ? err.message : String(err),

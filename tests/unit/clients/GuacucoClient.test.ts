@@ -14,7 +14,36 @@ import type {
 } from '../../../src/clients/types/GuacucoTypes.js';
 import { IdentityNotFoundError } from '../../../src/core/errors/IdentityNotFoundError.js';
 import { ToolExecutionError } from '../../../src/core/errors/ToolExecutionError.js';
+import type { Identity } from '../../../src/core/types/Identity.js';
 import type { RetryClient } from '../../../src/infrastructure/http/RetryClient.js';
+
+/** Identity de cliente — el context uniforme se deriva de acá. */
+const IDENTITY_CLIENT: Identity = {
+  tenantUuid: 'biz-1',
+  tenantAlliaId: 'allia-1',
+  profileUuid: 'cli-1',
+  profileType: 'client',
+  platformId: 1,
+  channel: 'whatsapp',
+  timezone: 'America/Argentina/Buenos_Aires',
+};
+
+/** context uniforme esperado para IDENTITY_CLIENT (sin role_id). */
+const CONTEXT_CLIENT = {
+  profile_uuid: 'cli-1',
+  profile_type: 'client',
+  business_uuid: 'biz-1',
+};
+
+const IDENTITY_STAFF: Identity = {
+  tenantUuid: 'biz-uuid',
+  tenantAlliaId: 'allia-1',
+  profileUuid: 'staff-uuid',
+  profileType: 'staff',
+  platformId: 1,
+  channel: 'whatsapp',
+  timezone: 'America/Argentina/Buenos_Aires',
+};
 
 function makeResponse<T>(data: Envelope<T>, status = 200): AxiosResponse<Envelope<T>> {
   return {
@@ -164,8 +193,8 @@ describe('GuacucoClient.resolveIdentity', () => {
   });
 });
 
-describe('GuacucoClient.executeTool', () => {
-  it('posts the request body with tool_name and parameters', async () => {
+describe('GuacucoClient tool dispatch (context uniforme)', () => {
+  it('posts the request body with tool_name, parameters and uniform context', async () => {
     const mockHttp = makeMockHttp();
     const toolResponse: ToolExecuteResponse<ScheduleAppointmentResult> = {
       tool_name: 'schedule_appointment',
@@ -194,6 +223,7 @@ describe('GuacucoClient.executeTool', () => {
         staff_uuid: 'stf-1',
         service_uuids: ['svc-1'],
       },
+      IDENTITY_CLIENT,
       { idempotencyKey: 'idem-1' },
     );
 
@@ -208,6 +238,7 @@ describe('GuacucoClient.executeTool', () => {
         staff_uuid: 'stf-1',
         service_uuids: ['svc-1'],
       },
+      context: CONTEXT_CLIENT,
       idempotency_key: 'idem-1',
     });
   });
@@ -225,13 +256,13 @@ describe('GuacucoClient.executeTool', () => {
     );
 
     const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
-    await client.cancelAppointment({ appointment_uuid: 'apt-1' });
+    await client.cancelAppointment({ appointment_uuid: 'apt-1' }, IDENTITY_CLIENT);
 
     const sentBody = mockHttp.post.mock.calls[0]?.[1] as Record<string, unknown>;
     expect(sentBody.idempotency_key).toBeUndefined();
   });
 
-  it('forwards context option when provided', async () => {
+  it('derives the uniform context from identity (callers never pass context)', async () => {
     const mockHttp = makeMockHttp();
     mockHttp.post.mockResolvedValue(
       makeResponse({
@@ -244,13 +275,10 @@ describe('GuacucoClient.executeTool', () => {
     );
 
     const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
-    await client.confirmAppointment(
-      { appointment_uuid: 'apt-1' },
-      { context: { profile_uuid: 'p1' } },
-    );
+    await client.confirmAppointment({ appointment_uuid: 'apt-1' }, IDENTITY_CLIENT);
 
     const sentBody = mockHttp.post.mock.calls[0]?.[1] as Record<string, unknown>;
-    expect(sentBody.context).toEqual({ profile_uuid: 'p1' });
+    expect(sentBody.context).toEqual(CONTEXT_CLIENT);
   });
 
   it('propagates ToolExecutionError on backend failure', async () => {
@@ -264,14 +292,17 @@ describe('GuacucoClient.executeTool', () => {
 
     const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
     await expect(
-      client.scheduleAppointment({
-        business_allia_id: 'allia-1',
-        date: '2026-06-01',
-        appointment_time: '10:00',
-        client_uuid: 'cli-1',
-        staff_uuid: 'stf-1',
-        service_uuids: ['svc-1'],
-      }),
+      client.scheduleAppointment(
+        {
+          business_allia_id: 'allia-1',
+          date: '2026-06-01',
+          appointment_time: '10:00',
+          client_uuid: 'cli-1',
+          staff_uuid: 'stf-1',
+          service_uuids: ['svc-1'],
+        },
+        IDENTITY_CLIENT,
+      ),
     ).rejects.toMatchObject({ code: 'STAFF_NOT_AVAILABLE' });
   });
 });
@@ -293,12 +324,15 @@ describe('GuacucoClient.validateRescheduleSlot', () => {
     );
 
     const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
-    const result = await client.validateRescheduleSlot({
-      appointment_uuid: 'apt-99',
-      profile_uuid: 'cli-1',
-      date_hint: ['2026-06-05'],
-      time_hint: '14:00',
-    });
+    const result = await client.validateRescheduleSlot(
+      {
+        appointment_uuid: 'apt-99',
+        profile_uuid: 'cli-1',
+        date_hint: ['2026-06-05'],
+        time_hint: '14:00',
+      },
+      IDENTITY_CLIENT,
+    );
 
     expect(result.passed).toBe(true);
     expect(result.proposed_slots).toEqual([{ date: '2026-06-05', time: '14:00' }]);
@@ -310,6 +344,7 @@ describe('GuacucoClient.validateRescheduleSlot', () => {
         date_hint: ['2026-06-05'],
         time_hint: '14:00',
       },
+      context: CONTEXT_CLIENT,
     });
   });
 
@@ -339,12 +374,15 @@ describe('GuacucoClient.validateRescheduleSlot', () => {
     );
 
     const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
-    const result = await client.validateRescheduleSlot({
-      appointment_uuid: 'apt-99',
-      profile_uuid: 'cli-1',
-      date_hint: ['2026-06-05'],
-      time_hint: '14:00',
-    });
+    const result = await client.validateRescheduleSlot(
+      {
+        appointment_uuid: 'apt-99',
+        profile_uuid: 'cli-1',
+        date_hint: ['2026-06-05'],
+        time_hint: '14:00',
+      },
+      IDENTITY_CLIENT,
+    );
 
     expect(result.passed).toBe(false);
     expect(result.proposed_slots).toHaveLength(2);
@@ -353,7 +391,7 @@ describe('GuacucoClient.validateRescheduleSlot', () => {
 });
 
 describe('GuacucoClient.getStaffAppointmentsSummary', () => {
-  it('calls executeTool with profile/business uuids in context', async () => {
+  it('derives staff context (profile/business uuids) from identity', async () => {
     const mockHttp = makeMockHttp();
     mockHttp.post.mockResolvedValue(
       makeResponse({
@@ -376,7 +414,7 @@ describe('GuacucoClient.getStaffAppointmentsSummary', () => {
     const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
     const result = await client.getStaffAppointmentsSummary(
       { date_start: '2026-05-28', date_end: '2026-05-28' },
-      { profileUuid: 'staff-uuid', businessUuid: 'biz-uuid' },
+      IDENTITY_STAFF,
     );
     expect(result.total).toBe(0);
     expect(mockHttp.post).toHaveBeenCalledWith('/api/v1/tools/execute', {
@@ -508,14 +546,18 @@ describe('GuacucoClient.checkAvailability', () => {
     );
 
     const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
-    await client.checkAvailability({
-      business_allia_id: 'allia-1',
-      staff_uuid: 'stf-1',
-      service_uuids: ['svc-1'],
-    });
+    await client.checkAvailability(
+      {
+        business_allia_id: 'allia-1',
+        staff_uuid: 'stf-1',
+        service_uuids: ['svc-1'],
+      },
+      IDENTITY_CLIENT,
+    );
 
-    const sentBody = mockHttp.post.mock.calls[0]?.[1] as { tool_name: string };
+    const sentBody = mockHttp.post.mock.calls[0]?.[1] as { tool_name: string; context: unknown };
     expect(sentBody.tool_name).toBe('check_availability');
+    expect(sentBody.context).toEqual(CONTEXT_CLIENT);
   });
 
   it('returns available=true + empty suggestions in Mode A on hit', async () => {
@@ -540,13 +582,16 @@ describe('GuacucoClient.checkAvailability', () => {
     );
 
     const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
-    const result = await client.checkAvailability({
-      business_allia_id: 'allia-1',
-      staff_uuid: 'stf-1',
-      service_uuids: ['svc-1'],
-      date: '2026-06-01',
-      appointment_time: '10:00',
-    });
+    const result = await client.checkAvailability(
+      {
+        business_allia_id: 'allia-1',
+        staff_uuid: 'stf-1',
+        service_uuids: ['svc-1'],
+        date: '2026-06-01',
+        appointment_time: '10:00',
+      },
+      IDENTITY_CLIENT,
+    );
 
     expect(result.available).toBe(true);
   });

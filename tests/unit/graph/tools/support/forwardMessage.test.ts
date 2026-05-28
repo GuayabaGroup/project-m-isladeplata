@@ -46,56 +46,52 @@ function makeState(contentText: string): GraphState {
   };
 }
 
-function makeGuacuco(impl: GuacucoClient['executeTool']): GuacucoClient {
-  return { executeTool: impl } as unknown as GuacucoClient;
+function makeGuacuco(impl: GuacucoClient['forwardMessage']): GuacucoClient {
+  return { forwardMessage: impl } as unknown as GuacucoClient;
 }
 
 afterEach(() => vi.clearAllMocks());
 
 describe('forwardMessage tool', () => {
   it('forwards sanitized text and returns confirmation', async () => {
-    const executeTool = vi.fn(async () => ({}));
+    const forward = vi.fn(async () => ({}));
     const update = await forwardMessage.run(makeState('Estoy en la <b>puerta</b>'), {
-      guacuco: makeGuacuco(executeTool as unknown as GuacucoClient['executeTool']),
+      guacuco: makeGuacuco(forward as unknown as GuacucoClient['forwardMessage']),
       logger: mockLogger,
     });
-    expect(executeTool).toHaveBeenCalledWith(
-      'forward_message',
-      { original_message: 'Estoy en la puerta' }, // HTML stripped by sanitizeUserInput
-      { context: { business_allia_id: 'allia-1', profile_uuid: 'profile-abc' } },
-    );
+    expect(forward).toHaveBeenCalledWith('Estoy en la puerta', IDENTITY); // HTML stripped by sanitizeUserInput
     expect(update.outcome?.action).toBe('response');
     expect(update.outcome?.pendingReply?.text).toMatch(/enviado al negocio/i);
   });
 
   it('returns ignored on empty input (nothing to forward)', async () => {
-    const executeTool = vi.fn();
+    const forward = vi.fn();
     const update = await forwardMessage.run(makeState('   '), {
-      guacuco: makeGuacuco(executeTool as unknown as GuacucoClient['executeTool']),
+      guacuco: makeGuacuco(forward as unknown as GuacucoClient['forwardMessage']),
       logger: mockLogger,
     });
     expect(update.outcome?.action).toBe('ignored');
-    expect(executeTool).not.toHaveBeenCalled();
+    expect(forward).not.toHaveBeenCalled();
   });
 
   it('returns error when identity is incomplete', async () => {
     const state = makeState('mensaje');
     state.identity = { ...IDENTITY, tenantAlliaId: '' };
-    const executeTool = vi.fn();
+    const forward = vi.fn();
     const update = await forwardMessage.run(state, {
-      guacuco: makeGuacuco(executeTool as unknown as GuacucoClient['executeTool']),
+      guacuco: makeGuacuco(forward as unknown as GuacucoClient['forwardMessage']),
       logger: mockLogger,
     });
     expect(update.outcome?.action).toBe('error');
-    expect(executeTool).not.toHaveBeenCalled();
+    expect(forward).not.toHaveBeenCalled();
   });
 
   it('returns error on backend failure', async () => {
-    const executeTool = vi.fn(async () => {
+    const forward = vi.fn(async () => {
       throw new Error('upstream');
     });
     const update = await forwardMessage.run(makeState('hola'), {
-      guacuco: makeGuacuco(executeTool as unknown as GuacucoClient['executeTool']),
+      guacuco: makeGuacuco(forward as unknown as GuacucoClient['forwardMessage']),
       logger: mockLogger,
     });
     expect(update.outcome?.action).toBe('error');

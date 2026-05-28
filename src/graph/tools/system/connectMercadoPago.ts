@@ -2,10 +2,6 @@ import type { Outcome } from '../../../core/types/Outcome.js';
 import type { GraphState, GraphStateUpdate } from '../../state.js';
 import type { AtomicTool, ToolDeps } from '../Tool.js';
 
-interface MercadoPagoResult {
-  url: string;
-}
-
 const ERROR_OUTCOME: Outcome = {
   action: 'error',
   pendingReply: {
@@ -18,18 +14,14 @@ export const connectMercadoPago: AtomicTool = {
   allowedRoles: ['staff'],
 
   async run(state: GraphState, deps: ToolDeps): Promise<GraphStateUpdate> {
-    const businessAlliaId = state.identity?.tenantAlliaId;
-    if (!businessAlliaId) {
-      deps.logger.warn('connectMercadoPago: missing tenantAlliaId in identity');
+    const identity = state.identity;
+    if (!identity?.profileUuid) {
+      deps.logger.warn('connectMercadoPago: missing profileUuid in identity');
       return { outcome: ERROR_OUTCOME };
     }
 
     try {
-      const result = await deps.guacuco.executeTool<MercadoPagoResult>(
-        'connect_mercado_pago',
-        {},
-        { context: { business_allia_id: businessAlliaId } },
-      );
+      const result = await deps.guacuco.connectMercadoPago(identity);
 
       if (!result?.url) {
         deps.logger.warn('connectMercadoPago: empty URL from Guacuco');

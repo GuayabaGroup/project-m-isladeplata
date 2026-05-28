@@ -1,12 +1,14 @@
 import type { Logger } from 'winston';
 import type { GuacucoClient } from '../../../../clients/GuacucoClient.js';
 import type { CancelAppointmentResult } from '../../../../clients/types/GuacucoTypes.js';
+import { GUACUCO_TOOLS } from '../../../../core/enums/GuacucoToolName.js';
 import { ToolExecutionError } from '../../../../core/errors/ToolExecutionError.js';
+import type { Identity } from '../../../../core/types/Identity.js';
 import type { Outcome } from '../../../../core/types/Outcome.js';
 import { assertSlotsResolvedGeneric, toolCallErrorCode, withToolCall } from '../../common/state.js';
 import type { CancelDraftState } from '../state.js';
 
-const TOOL_NAME = 'cancel_appointment';
+const TOOL_NAME = GUACUCO_TOOLS.CANCEL_APPOINTMENT;
 
 /**
  * Commit del subgrafo cancel. Llama `guacuco.cancelAppointment` con
@@ -48,10 +50,17 @@ export function makeCancelCommitNode(deps: CancelCommitDeps) {
   const { guacuco, logger } = deps;
 
   return async function commit(state: {
+    identity?: Identity | null;
     subgraphState?: unknown;
   }): Promise<Partial<CancelDraftState>> {
     const current = state.subgraphState as CancelDraftState | undefined;
     if (!current) return { phase: 'failed', terminalOutcome: ERROR_GENERIC };
+
+    const identity = state.identity;
+    if (!identity) {
+      logger.warn('cancel.commit: missing identity');
+      return { phase: 'failed', terminalOutcome: ERROR_GENERIC };
+    }
 
     assertSlotsResolvedGeneric(current.slots, ['appointmentUuid']);
 
@@ -66,7 +75,7 @@ export function makeCancelCommitNode(deps: CancelCommitDeps) {
 
     let result: CancelAppointmentResult;
     try {
-      result = await guacuco.cancelAppointment(input, { idempotencyKey: intentUuid });
+      result = await guacuco.cancelAppointment(input, identity, { idempotencyKey: intentUuid });
     } catch (err) {
       const code = toolCallErrorCode(err);
       return withToolCall(handleError(err, logger), {

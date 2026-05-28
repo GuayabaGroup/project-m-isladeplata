@@ -24,12 +24,11 @@ export const forwardMessage: AtomicTool = {
   allowedRoles: ['client', 'staff'],
 
   async run(state: GraphState, deps: ToolDeps): Promise<GraphStateUpdate> {
-    const businessAlliaId = state.identity?.tenantAlliaId;
-    const profileUuid = state.identity?.profileUuid;
+    const identity = state.identity;
     const rawText = state.input?.channelMessage?.contentText ?? '';
     const cleanText = sanitizeUserInput(rawText);
 
-    if (!businessAlliaId || !profileUuid) {
+    if (!identity?.tenantAlliaId || !identity?.profileUuid) {
       deps.logger.warn('forwardMessage: missing identity fields');
       return { outcome: ERROR_OUTCOME };
     }
@@ -39,11 +38,7 @@ export const forwardMessage: AtomicTool = {
     }
 
     try {
-      await deps.guacuco.executeTool<unknown>(
-        'forward_message',
-        { original_message: cleanText },
-        { context: { business_allia_id: businessAlliaId, profile_uuid: profileUuid } },
-      );
+      await deps.guacuco.forwardMessage(cleanText, identity);
 
       const outcome: Outcome = {
         action: 'response',

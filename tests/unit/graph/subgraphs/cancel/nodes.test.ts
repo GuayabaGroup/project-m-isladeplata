@@ -7,6 +7,7 @@ import type { CancelAppointmentResult } from '../../../../../src/clients/types/G
 import { IdpError } from '../../../../../src/core/errors/IdpError.js';
 import { ToolExecutionError } from '../../../../../src/core/errors/ToolExecutionError.js';
 import type { CrmContext } from '../../../../../src/core/types/CrmContext.js';
+import type { Identity } from '../../../../../src/core/types/Identity.js';
 import { makeCancelAskSlotNode } from '../../../../../src/graph/subgraphs/cancel/nodes/askSlot.js';
 import { makeCancelBootstrapNode } from '../../../../../src/graph/subgraphs/cancel/nodes/bootstrap.js';
 import { makeCancelBuildConfirmMessageNode } from '../../../../../src/graph/subgraphs/cancel/nodes/buildConfirmMessage.js';
@@ -28,6 +29,16 @@ const mockLogger = {
   info: vi.fn(),
   debug: vi.fn(),
 } as unknown as Logger;
+
+const IDENTITY: Identity = {
+  tenantUuid: 'biz-1',
+  tenantAlliaId: 'allia-1',
+  profileUuid: 'profile-1',
+  profileType: 'client',
+  platformId: 1,
+  channel: 'whatsapp',
+  timezone: 'America/Argentina/Buenos_Aires',
+};
 
 function stub(text: string): Anthropic.Messages.Message {
   return {
@@ -342,9 +353,11 @@ describe('cancel.commit', () => {
   it('happy: phase=done, idempotencyKey=intentUuid', async () => {
     const fn = vi.fn(async () => successCancelResult());
     const node = makeCancelCommitNode({ guacuco: makeGuacuco(fn), logger: mockLogger });
-    const out = await node({ subgraphState: committingDraft() });
+    const out = await node({ identity: IDENTITY, subgraphState: committingDraft() });
     expect(out.phase).toBe('done');
-    expect(fn).toHaveBeenCalledWith({ appointment_uuid: 'apt-1' }, { idempotencyKey: GATE_UUID });
+    expect(fn).toHaveBeenCalledWith({ appointment_uuid: 'apt-1' }, IDENTITY, {
+      idempotencyKey: GATE_UUID,
+    });
   });
 
   it('anti-alucinación: slot no resolved lanza IdpError', async () => {
@@ -352,7 +365,9 @@ describe('cancel.commit', () => {
     draft.slots.appointmentUuid = { status: 'empty' };
     const fn = vi.fn();
     const node = makeCancelCommitNode({ guacuco: makeGuacuco(fn as never), logger: mockLogger });
-    await expect(node({ subgraphState: draft })).rejects.toBeInstanceOf(IdpError);
+    await expect(node({ identity: IDENTITY, subgraphState: draft })).rejects.toBeInstanceOf(
+      IdpError,
+    );
     expect(fn).not.toHaveBeenCalled();
   });
 
@@ -361,7 +376,7 @@ describe('cancel.commit', () => {
       throw new ToolExecutionError('APPOINTMENT_ALREADY_CANCELLED', 'already');
     });
     const node = makeCancelCommitNode({ guacuco: makeGuacuco(fn), logger: mockLogger });
-    const out = await node({ subgraphState: committingDraft() });
+    const out = await node({ identity: IDENTITY, subgraphState: committingDraft() });
     expect(out.phase).toBe('done');
   });
 
@@ -370,7 +385,7 @@ describe('cancel.commit', () => {
       throw new ToolExecutionError('APPOINTMENT_NOT_FOUND', 'gone');
     });
     const node = makeCancelCommitNode({ guacuco: makeGuacuco(fn), logger: mockLogger });
-    const out = await node({ subgraphState: committingDraft() });
+    const out = await node({ identity: IDENTITY, subgraphState: committingDraft() });
     expect(out.terminalOutcome?.action).toBe('error');
   });
 
@@ -379,7 +394,7 @@ describe('cancel.commit', () => {
     draft.confirmation = {};
     const fn = vi.fn();
     const node = makeCancelCommitNode({ guacuco: makeGuacuco(fn as never), logger: mockLogger });
-    const out = await node({ subgraphState: draft });
+    const out = await node({ identity: IDENTITY, subgraphState: draft });
     expect(out.phase).toBe('failed');
     expect(out.terminalOutcome?.action).toBe('error');
     expect(fn).not.toHaveBeenCalled();

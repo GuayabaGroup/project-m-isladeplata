@@ -1,12 +1,14 @@
 import type { Logger } from 'winston';
 import type { GuacucoClient } from '../../../../clients/GuacucoClient.js';
 import type { RescheduleAppointmentResult } from '../../../../clients/types/GuacucoTypes.js';
+import { GUACUCO_TOOLS } from '../../../../core/enums/GuacucoToolName.js';
 import { ToolExecutionError } from '../../../../core/errors/ToolExecutionError.js';
+import type { Identity } from '../../../../core/types/Identity.js';
 import type { Outcome } from '../../../../core/types/Outcome.js';
 import { assertSlotsResolvedGeneric, toolCallErrorCode, withToolCall } from '../../common/state.js';
 import { RESCHEDULE_REQUIRED_SLOTS, type RescheduleDraftState } from '../state.js';
 
-const TOOL_NAME = 'reschedule_appointment';
+const TOOL_NAME = GUACUCO_TOOLS.RESCHEDULE_APPOINTMENT;
 
 /**
  * Commit del subgrafo reschedule. Llama `guacuco.rescheduleAppointment` con
@@ -74,10 +76,17 @@ export function makeRescheduleCommitNode(deps: RescheduleCommitDeps) {
   const { guacuco, logger } = deps;
 
   return async function commit(state: {
+    identity?: Identity | null;
     subgraphState?: unknown;
   }): Promise<Partial<RescheduleDraftState>> {
     const current = state.subgraphState as RescheduleDraftState | undefined;
     if (!current) return { phase: 'failed', terminalOutcome: ERROR_GENERIC };
+
+    const identity = state.identity;
+    if (!identity) {
+      logger.warn('reschedule.commit: missing identity');
+      return { phase: 'failed', terminalOutcome: ERROR_GENERIC };
+    }
 
     assertSlotsResolvedGeneric(current.slots, RESCHEDULE_REQUIRED_SLOTS);
 
@@ -94,7 +103,7 @@ export function makeRescheduleCommitNode(deps: RescheduleCommitDeps) {
 
     let result: RescheduleAppointmentResult;
     try {
-      result = await guacuco.rescheduleAppointment(input, { idempotencyKey: intentUuid });
+      result = await guacuco.rescheduleAppointment(input, identity, { idempotencyKey: intentUuid });
     } catch (err) {
       const code = toolCallErrorCode(err);
       return withToolCall(handleError(err, current, logger), {

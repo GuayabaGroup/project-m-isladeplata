@@ -94,6 +94,7 @@ describe('commit — happy path', () => {
         staff_uuid: 'stf-maria',
         service_uuids: ['svc-corte'],
       },
+      IDENTITY_CLIENT,
       { idempotencyKey: KNOWN_UUID },
     );
   });
@@ -106,6 +107,7 @@ describe('commit — happy path', () => {
     await node({ identity: IDENTITY_STAFF, subgraphState: makeReadyDraft('staff') });
     expect(fn).toHaveBeenCalledWith(
       expect.objectContaining({ client_uuid: 'real-client-uuid' }),
+      IDENTITY_STAFF,
       expect.any(Object),
     );
   });

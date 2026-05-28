@@ -6,6 +6,7 @@ import type { GuacucoClient } from '../../../../../src/clients/GuacucoClient.js'
 import type { RescheduleAppointmentResult } from '../../../../../src/clients/types/GuacucoTypes.js';
 import { IdpError } from '../../../../../src/core/errors/IdpError.js';
 import { ToolExecutionError } from '../../../../../src/core/errors/ToolExecutionError.js';
+import type { Identity } from '../../../../../src/core/types/Identity.js';
 import { makeRescheduleBuildConfirmMessageNode } from '../../../../../src/graph/subgraphs/reschedule/nodes/buildConfirmMessage.js';
 import { makeRescheduleCommitNode } from '../../../../../src/graph/subgraphs/reschedule/nodes/commit.js';
 import { makeRescheduleGateConfirmNode } from '../../../../../src/graph/subgraphs/reschedule/nodes/gateConfirm.js';
@@ -25,6 +26,16 @@ const mockLogger = {
   info: vi.fn(),
   debug: vi.fn(),
 } as unknown as Logger;
+
+const IDENTITY: Identity = {
+  tenantUuid: 'biz-1',
+  tenantAlliaId: 'allia-1',
+  profileUuid: 'profile-1',
+  profileType: 'client',
+  platformId: 1,
+  channel: 'whatsapp',
+  timezone: 'America/Argentina/Buenos_Aires',
+};
 
 function stub(text: string): Anthropic.Messages.Message {
   return {
@@ -242,10 +253,11 @@ describe('reschedule.commit', () => {
     draft.confirmation = { intentUuid: 'iu-1' };
     draft.phase = 'committing';
     const node = makeRescheduleCommitNode({ guacuco, logger: mockLogger });
-    const update = await node({ subgraphState: draft });
+    const update = await node({ identity: IDENTITY, subgraphState: draft });
     expect(update.phase).toBe('done');
     expect(call).toHaveBeenCalledWith(
       { appointment_uuid: 'apt-1', new_date: '2026-06-05', new_time: '14:00' },
+      IDENTITY,
       { idempotencyKey: 'iu-1' },
     );
   });
@@ -255,7 +267,9 @@ describe('reschedule.commit', () => {
     const draft = initialRescheduleDraftState(); // todos empty
     draft.confirmation = { intentUuid: 'iu-1' };
     const node = makeRescheduleCommitNode({ guacuco, logger: mockLogger });
-    await expect(node({ subgraphState: draft })).rejects.toBeInstanceOf(IdpError);
+    await expect(node({ identity: IDENTITY, subgraphState: draft })).rejects.toBeInstanceOf(
+      IdpError,
+    );
   });
 
   it('STAFF_NOT_AVAILABLE 1st time → recovery (back to validating + clean confirmation)', async () => {
@@ -265,7 +279,7 @@ describe('reschedule.commit', () => {
     const draft = readyDraft();
     draft.confirmation = { intentUuid: 'iu-1' };
     const node = makeRescheduleCommitNode({ guacuco, logger: mockLogger });
-    const update = await node({ subgraphState: draft });
+    const update = await node({ identity: IDENTITY, subgraphState: draft });
     expect(update.phase).toBe('validating_availability');
     expect(update.confirmation).toEqual({});
     expect(update.availability?.proposedSlots).toEqual([]);
@@ -280,7 +294,7 @@ describe('reschedule.commit', () => {
     draft.confirmation = { intentUuid: 'iu-1' };
     draft.meta.recoverableErrors = ['STAFF_NOT_AVAILABLE'];
     const node = makeRescheduleCommitNode({ guacuco, logger: mockLogger });
-    const update = await node({ subgraphState: draft });
+    const update = await node({ identity: IDENTITY, subgraphState: draft });
     expect(update.phase).toBe('failed');
     expect(update.terminalOutcome?.action).toBe('handed_off');
   });
@@ -292,7 +306,7 @@ describe('reschedule.commit', () => {
     const draft = readyDraft();
     draft.confirmation = { intentUuid: 'iu-1' };
     const node = makeRescheduleCommitNode({ guacuco, logger: mockLogger });
-    const update = await node({ subgraphState: draft });
+    const update = await node({ identity: IDENTITY, subgraphState: draft });
     expect(update.phase).toBe('failed');
     expect(update.terminalOutcome?.action).toBe('error');
     expect(update.terminalOutcome?.pendingReply?.text).toMatch(/no encontré/i);
@@ -305,7 +319,7 @@ describe('reschedule.commit', () => {
     const draft = readyDraft();
     draft.confirmation = { intentUuid: 'iu-1' };
     const node = makeRescheduleCommitNode({ guacuco, logger: mockLogger });
-    const update = await node({ subgraphState: draft });
+    const update = await node({ identity: IDENTITY, subgraphState: draft });
     expect(update.phase).toBe('failed');
     expect(update.terminalOutcome?.action).toBe('error');
     expect(update.terminalOutcome?.pendingReply?.text).toMatch(/no se puede reagendar/i);
@@ -318,7 +332,7 @@ describe('reschedule.commit', () => {
     const draft = readyDraft();
     draft.confirmation = { intentUuid: 'iu-1' };
     const node = makeRescheduleCommitNode({ guacuco, logger: mockLogger });
-    const update = await node({ subgraphState: draft });
+    const update = await node({ identity: IDENTITY, subgraphState: draft });
     expect(update.phase).toBe('failed');
     expect(update.terminalOutcome?.action).toBe('handed_off');
     expect(update.terminalOutcome?.pendingReply?.text).toMatch(/procesado/i);
@@ -331,7 +345,7 @@ describe('reschedule.commit', () => {
     const draft = readyDraft();
     draft.confirmation = { intentUuid: 'iu-1' };
     const node = makeRescheduleCommitNode({ guacuco, logger: mockLogger });
-    const update = await node({ subgraphState: draft });
+    const update = await node({ identity: IDENTITY, subgraphState: draft });
     expect(update.phase).toBe('failed');
     expect(update.terminalOutcome?.action).toBe('error');
   });
@@ -347,7 +361,7 @@ describe('reschedule.successResponse', () => {
     const node = makeRescheduleSuccessNode({ llm, logger: mockLogger });
     const draft = readyDraft();
     draft.phase = 'done';
-    const update = await node({ subgraphState: draft });
+    const update = await node({ identity: IDENTITY, subgraphState: draft });
     expect(update.terminalOutcome?.action).toBe('response');
     expect(update.terminalOutcome?.pendingReply?.text).toMatch(/reagendado/i);
   });
@@ -356,7 +370,7 @@ describe('reschedule.successResponse', () => {
     const { llm } = makeLlm('');
     const node = makeRescheduleSuccessNode({ llm, logger: mockLogger });
     const draft = readyDraft();
-    const update = await node({ subgraphState: draft });
+    const update = await node({ identity: IDENTITY, subgraphState: draft });
     expect(update.terminalOutcome?.pendingReply?.text).toMatch(/reagendé/i);
     expect(update.terminalOutcome?.pendingReply?.text).toMatch(/Corte con María/);
   });

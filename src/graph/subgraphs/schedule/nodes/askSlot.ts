@@ -118,7 +118,9 @@ function buildSlotPayload(
     case 'date_time':
       return { text: '¿Para cuándo? Decime día y hora (ej: "mañana a las 16" o "lunes 10hs").' };
     case 'clientUuid':
-      return { text: '¿Para qué cliente? Decime nombre o teléfono.' };
+      return {
+        text: '¿Para qué cliente? Pasame el teléfono (con código de área), y si querés también el nombre. Ej: "Juan +5491134498081".',
+      };
   }
 }
 
@@ -279,9 +281,9 @@ function interpretDateTimeReply(
 
 function interpretClientUuidReply(text: string): Partial<AppointmentDraftSlots> {
   if (text.length === 0) return {};
-  // v1 scope: sin búsqueda CRM. Guardamos texto libre como userPhrase.
-  // El operador staff luego corrige desde dashboard o el subgrafo handed_off.
-  // Si Guacuco/Parguito eventualmente exponen búsqueda, esto se reemplaza.
+  // Guardamos el texto libre (nombre + teléfono) como userPhrase. `resolveEntities`
+  // lo parsea y resuelve a un client_uuid real vía Guacuco (find-or-create por
+  // teléfono). Si no hay teléfono, queda 'guessed' y ask_slot vuelve a pedirlo.
   return {
     clientUuid: { userPhrase: text, status: 'guessed' },
   };

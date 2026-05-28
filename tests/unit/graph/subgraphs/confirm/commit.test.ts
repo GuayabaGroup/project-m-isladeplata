@@ -4,6 +4,7 @@ import type { GuacucoClient } from '../../../../../src/clients/GuacucoClient.js'
 import type { ConfirmAppointmentResult } from '../../../../../src/clients/types/GuacucoTypes.js';
 import { IdpError } from '../../../../../src/core/errors/IdpError.js';
 import { ToolExecutionError } from '../../../../../src/core/errors/ToolExecutionError.js';
+import type { Identity } from '../../../../../src/core/types/Identity.js';
 import { makeConfirmCommitNode } from '../../../../../src/graph/subgraphs/confirm/nodes/commit.js';
 import {
   type ConfirmDraftState,
@@ -16,6 +17,16 @@ const mockLogger = {
   info: vi.fn(),
   debug: vi.fn(),
 } as unknown as Logger;
+
+const IDENTITY: Identity = {
+  tenantUuid: 'biz-1',
+  tenantAlliaId: 'allia-1',
+  profileUuid: 'profile-1',
+  profileType: 'client',
+  platformId: 1,
+  channel: 'whatsapp',
+  timezone: 'America/Argentina/Buenos_Aires',
+};
 
 function readyDraft(): ConfirmDraftState {
   const d = initialConfirmDraftState();
@@ -45,12 +56,13 @@ describe('confirm.commit', () => {
   it('happy: phase=done, llama confirmAppointment con uuid + idempotencyKey', async () => {
     const fn = vi.fn(async () => successResult());
     const node = makeConfirmCommitNode({ guacuco: makeGuacuco(fn), logger: mockLogger });
-    const out = await node({ subgraphState: readyDraft() });
+    const out = await node({ identity: IDENTITY, subgraphState: readyDraft() });
 
     expect(out.phase).toBe('done');
     expect(fn).toHaveBeenCalledOnce();
-    const [params, opts] = fn.mock.calls[0] ?? [];
+    const [params, identity, opts] = fn.mock.calls[0] ?? [];
     expect(params).toEqual({ appointment_uuid: 'apt-1' });
+    expect(identity).toEqual(IDENTITY);
     expect((opts as { idempotencyKey?: string })?.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/);
   });
 
@@ -62,7 +74,9 @@ describe('confirm.commit', () => {
       guacuco: makeGuacuco(fn as never),
       logger: mockLogger,
     });
-    await expect(node({ subgraphState: draft })).rejects.toBeInstanceOf(IdpError);
+    await expect(node({ identity: IDENTITY, subgraphState: draft })).rejects.toBeInstanceOf(
+      IdpError,
+    );
     expect(fn).not.toHaveBeenCalled();
   });
 
@@ -71,7 +85,7 @@ describe('confirm.commit', () => {
       throw new ToolExecutionError('APPOINTMENT_ALREADY_CONFIRMED', 'already');
     });
     const node = makeConfirmCommitNode({ guacuco: makeGuacuco(fn), logger: mockLogger });
-    const out = await node({ subgraphState: readyDraft() });
+    const out = await node({ identity: IDENTITY, subgraphState: readyDraft() });
     expect(out.phase).toBe('done');
     expect(out.terminalOutcome).toBeUndefined();
   });
@@ -81,7 +95,7 @@ describe('confirm.commit', () => {
       throw new ToolExecutionError('APPOINTMENT_NOT_FOUND', 'gone');
     });
     const node = makeConfirmCommitNode({ guacuco: makeGuacuco(fn), logger: mockLogger });
-    const out = await node({ subgraphState: readyDraft() });
+    const out = await node({ identity: IDENTITY, subgraphState: readyDraft() });
     expect(out.phase).toBe('failed');
     expect(out.terminalOutcome?.action).toBe('error');
     expect(out.terminalOutcome?.pendingReply?.text).toMatch(/cancelado|no encontr/i);
@@ -92,7 +106,7 @@ describe('confirm.commit', () => {
       throw new ToolExecutionError('SOMETHING_NEW', 'msg');
     });
     const node = makeConfirmCommitNode({ guacuco: makeGuacuco(fn), logger: mockLogger });
-    const out = await node({ subgraphState: readyDraft() });
+    const out = await node({ identity: IDENTITY, subgraphState: readyDraft() });
     expect(out.terminalOutcome?.action).toBe('handed_off');
   });
 
@@ -101,7 +115,7 @@ describe('confirm.commit', () => {
       throw new Error('econnreset');
     });
     const node = makeConfirmCommitNode({ guacuco: makeGuacuco(fn), logger: mockLogger });
-    const out = await node({ subgraphState: readyDraft() });
+    const out = await node({ identity: IDENTITY, subgraphState: readyDraft() });
     expect(out.terminalOutcome?.action).toBe('error');
   });
 });

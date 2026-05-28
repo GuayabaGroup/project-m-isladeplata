@@ -2,10 +2,6 @@ import type { Outcome } from '../../../core/types/Outcome.js';
 import type { GraphState, GraphStateUpdate } from '../../state.js';
 import type { AtomicTool, ToolDeps } from '../Tool.js';
 
-interface ManzanilloUrlResult {
-  url: string;
-}
-
 const ERROR_OUTCOME: Outcome = {
   action: 'error',
   pendingReply: {
@@ -18,18 +14,14 @@ export const retrieveManzanilloUrl: AtomicTool = {
   allowedRoles: ['client'],
 
   async run(state: GraphState, deps: ToolDeps): Promise<GraphStateUpdate> {
-    const profileUuid = state.identity?.profileUuid;
-    if (!profileUuid) {
-      deps.logger.warn('retrieveManzanilloUrl: missing profileUuid in identity');
+    const identity = state.identity;
+    if (!identity?.tenantAlliaId) {
+      deps.logger.warn('retrieveManzanilloUrl: missing tenantAlliaId in identity');
       return { outcome: ERROR_OUTCOME };
     }
 
     try {
-      const result = await deps.guacuco.executeTool<ManzanilloUrlResult>(
-        'retrieve_manzanillo_url',
-        {},
-        { context: { profile_uuid: profileUuid } },
-      );
+      const result = await deps.guacuco.retrieveManzanilloUrl(identity);
 
       if (!result?.url) {
         deps.logger.warn('retrieveManzanilloUrl: empty URL from Guacuco');

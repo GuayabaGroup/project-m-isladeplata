@@ -272,6 +272,7 @@ describe('schedule E2E #1: happy path turno único (1 turno)', () => {
         staff_uuid: 'stf-maria',
         client_uuid: 'profile-client',
       }),
+      IDENTITY_CLIENT,
       expect.objectContaining({ idempotencyKey: intentUuid }),
     );
     expect(final.outcome?.action).toBe('response');
@@ -415,6 +416,7 @@ describe('schedule E2E #3: slot no disponible → present_options → user picks
         date: '2026-05-28',
         appointment_time: '18:00', // del pick
       }),
+      IDENTITY_CLIENT,
       expect.any(Object),
     );
     expect(third.outcome?.action).toBe('response');
@@ -638,6 +640,7 @@ describe('schedule E2E #8: multi-service', () => {
         service_uuids: ['svc-corte', 'svc-barba'],
         staff_uuid: 'stf-juan', // único staff común a ambos servicios
       }),
+      IDENTITY_CLIENT,
       expect.any(Object),
     );
   });

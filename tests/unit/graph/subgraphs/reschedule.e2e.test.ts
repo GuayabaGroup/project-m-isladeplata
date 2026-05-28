@@ -248,6 +248,7 @@ describe('reschedule E2E #2: 1 upcoming + slot disponible', () => {
     expect(calls.reschedule).toHaveBeenCalledOnce();
     expect(calls.reschedule).toHaveBeenCalledWith(
       { appointment_uuid: 'apt-1', new_date: '2026-06-05', new_time: '14:00' },
+      IDENTITY,
       expect.objectContaining({ idempotencyKey: intentUuid }),
     );
     expect(third.outcome?.action).toBe('response');
@@ -303,6 +304,7 @@ describe('reschedule E2E #3: N upcomings → ask cuál → ask date/time → com
     );
     expect(calls.reschedule).toHaveBeenCalledWith(
       expect.objectContaining({ appointment_uuid: 'apt-2' }),
+      IDENTITY,
       expect.any(Object),
     );
     expect(fourth.outcome?.action).toBe('response');
@@ -377,6 +379,7 @@ describe('reschedule E2E #4: slot ocupado → present_options → user pick → 
         new_date: '2026-06-05',
         new_time: '16:00',
       }),
+      IDENTITY,
       expect.any(Object),
     );
     expect(fourth.outcome?.action).toBe('response');
