@@ -216,6 +216,60 @@ describe('Pipeline.process', () => {
     expect((initialState as { crmContext: unknown }).crmContext).toEqual(EMPTY_CRM_CONTEXT);
   });
 
+  it('augments crmContext.upcomingAppointments from Guacuco profileData.appointments', async () => {
+    const { deps, mocks } = makeDeps();
+    mocks.guacuco.resolveIdentity.mockResolvedValue(
+      fullIdentity({
+        profileData: {
+          client_uuid: 'cli-1',
+          appointments: [
+            { appointment_uuid: 'apt-1', description: 'Corte mañana 15h' },
+            { appointment_uuid: 'apt-2', description: 'Color viernes' },
+          ],
+        },
+      }),
+    );
+    const pipeline = new Pipeline(deps);
+
+    await pipeline.process(makeMessage());
+
+    const [initialState] = mocks.graph.invoke.mock.calls[0] ?? [];
+    expect((initialState as { crmContext: unknown }).crmContext).toEqual({
+      upcomingAppointments: [
+        { appointmentUuid: 'apt-1', description: 'Corte mañana 15h' },
+        { appointmentUuid: 'apt-2', description: 'Color viernes' },
+      ],
+      profileMeta: {},
+    });
+    // Parguito sigue sin llamarse (flag off); los turnos vienen de Guacuco.
+    expect(mocks.parguito.getCrmContext).not.toHaveBeenCalled();
+  });
+
+  it('drops malformed Guacuco appointments (missing uuid/description)', async () => {
+    const { deps, mocks } = makeDeps();
+    mocks.guacuco.resolveIdentity.mockResolvedValue(
+      fullIdentity({
+        profileData: {
+          client_uuid: 'cli-1',
+          appointments: [
+            { appointment_uuid: 'apt-1', description: 'Válido' },
+            { appointment_uuid: '', description: 'Sin uuid' },
+            { appointment_uuid: 'apt-3', description: '' },
+          ],
+        },
+      }),
+    );
+    const pipeline = new Pipeline(deps);
+
+    await pipeline.process(makeMessage());
+
+    const [initialState] = mocks.graph.invoke.mock.calls[0] ?? [];
+    expect(
+      (initialState as { crmContext: { upcomingAppointments: unknown[] } }).crmContext
+        .upcomingAppointments,
+    ).toEqual([{ appointmentUuid: 'apt-1', description: 'Válido' }]);
+  });
+
   it('passes identity + crmContext + channelMessage to graph.invoke', async () => {
     const { deps, mocks } = makeDeps();
     mocks.guacuco.resolveIdentity.mockResolvedValue(fullIdentity());

@@ -4,8 +4,11 @@ import type { ScheduleAppointmentResult } from '../../../../clients/types/Guacuc
 import { ToolExecutionError } from '../../../../core/errors/ToolExecutionError.js';
 import type { Identity } from '../../../../core/types/Identity.js';
 import type { Outcome } from '../../../../core/types/Outcome.js';
+import { toolCallErrorCode, withToolCall } from '../../common/state.js';
 import { assertSlotsResolved } from '../assertions.js';
 import type { AppointmentDraftState } from '../state.js';
+
+const TOOL_NAME = 'schedule_appointment';
 
 /**
  * Nodo `commit`: ejecuta el side effect en Guacuco (`scheduleAppointment`)
@@ -112,7 +115,13 @@ export function makeCommitNode(deps: CommitDeps) {
     try {
       result = await guacuco.scheduleAppointment(params, { idempotencyKey: intentUuid });
     } catch (err) {
-      return handleCommitError(err, current, logger);
+      const code = toolCallErrorCode(err);
+      return withToolCall(handleCommitError(err, current, logger), {
+        toolName: TOOL_NAME,
+        input: params,
+        resultStatus: 'error',
+        ...(code ? { errorCode: code } : {}),
+      });
     }
 
     logger.debug('commit success', {
@@ -120,12 +129,12 @@ export function makeCommitNode(deps: CommitDeps) {
       status: result.status,
     });
 
-    return {
-      phase: 'done',
-      // El terminalOutcome real (success message) lo arma successResponse.
-      // Acá dejamos un marker mínimo para el caso en que successResponse no
-      // corra (defensa) — el wrapper sólo usa terminalOutcome si está set.
-    };
+    // El terminalOutcome real (success message) lo arma successResponse. Acá
+    // sólo marcamos phase='done' + registramos el tool_call ejecutado.
+    return withToolCall<Partial<AppointmentDraftState>>(
+      { phase: 'done' },
+      { toolName: TOOL_NAME, input: params, resultStatus: 'ok' },
+    );
   };
 }
 

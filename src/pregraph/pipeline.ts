@@ -9,7 +9,11 @@ import { env } from '../config/env.js';
 import { IdentityNotFoundError } from '../core/errors/IdentityNotFoundError.js';
 import { type CatalogService, type CatalogState, EMPTY_CATALOG } from '../core/types/Catalog.js';
 import type { ChannelMessage } from '../core/types/ChannelMessage.js';
-import { EMPTY_CRM_CONTEXT } from '../core/types/CrmContext.js';
+import {
+  type CrmContext,
+  EMPTY_CRM_CONTEXT,
+  type UpcomingAppointment,
+} from '../core/types/CrmContext.js';
 import type { Identity } from '../core/types/Identity.js';
 import type { Outcome } from '../core/types/Outcome.js';
 import type { CompiledGraph } from '../graph/compile.js';
@@ -205,13 +209,22 @@ export class Pipeline implements MessageProcessor {
       return outcome;
     }
 
-    // 6. CRM context — gated por env.PARGUITO_ENABLED. Mientras Parguito esté
-    // en stub Etapa 3, el flag queda en `false` y pasamos defaults sin hacer
-    // el roundtrip HTTP. Al habilitarse, `ParguitoClient` es estricto y
-    // cualquier fallo cae al global catch del pipeline.
-    const crmContext = env.PARGUITO_ENABLED
+    // 6. CRM context. Parguito (gated por env.PARGUITO_ENABLED) aporta
+    // profileMeta/historial; mientras esté en stub Etapa 3 el flag queda en
+    // `false` y partimos de defaults sin roundtrip HTTP. Al habilitarse,
+    // `ParguitoClient` es estricto y cualquier fallo cae al global catch.
+    //
+    // Los turnos próximos que consumen los bootstraps de confirm/cancel/
+    // reschedule vienen SIEMPRE de Guacuco (source of truth de appointments,
+    // ya resueltos en step 2 vía `profileData.appointments` — §7.1 paso 7), no
+    // de Parguito: por eso `upcomingAppointments` se sobreescribe acá.
+    const baseCrm = env.PARGUITO_ENABLED
       ? await this.parguito.getCrmContext(profileUuid)
       : EMPTY_CRM_CONTEXT;
+    const crmContext: CrmContext = {
+      ...baseCrm,
+      upcomingAppointments: mapGuacucoAppointments(identity.profileData.appointments),
+    };
 
     // 6.1 Catálogo (helpersLists del identity) — usado por H4 schedule subgrafo
     const catalog = buildCatalog(identity.helpersLists);
@@ -277,6 +290,9 @@ export class Pipeline implements MessageProcessor {
     if (subgraph) subgraphEnteredTotal.labels({ subgraph }).inc();
     void this.persister.persistTurn(message, internalIdentity, outcome, {
       ...(subgraph ? { subgraph } : {}),
+      ...(outcome.toolCalls && outcome.toolCalls.length > 0
+        ? { toolCalls: outcome.toolCalls }
+        : {}),
     });
     return outcome;
   }
@@ -340,6 +356,22 @@ function toInternalIdentityOrNull(
       ? { roleId: identity.businessStaffRoles.role_id }
       : {}),
   };
+}
+
+/**
+ * Mapea `profileData.appointments` del identity resolve de Guacuco (source of
+ * truth de turnos) al shape `UpcomingAppointment` que consumen los bootstraps
+ * de confirm/cancel/reschedule. Guacuco no expone `startAt` en este payload, así
+ * que el campo queda ausente (opcional en el tipo); los nodos que lo muestran ya
+ * lo tratan como opcional. Filtra entradas sin `appointment_uuid`/`description`.
+ */
+function mapGuacucoAppointments(
+  appointments: ResolveIdentityOutput['profileData']['appointments'],
+): UpcomingAppointment[] {
+  if (!appointments || appointments.length === 0) return [];
+  return appointments
+    .filter((a) => a?.appointment_uuid && a?.description)
+    .map((a) => ({ appointmentUuid: a.appointment_uuid, description: a.description }));
 }
 
 /**

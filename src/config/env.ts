@@ -86,6 +86,8 @@ export const envSchema = z
     SUPERVISOR_MODEL: z.string().default('claude-haiku-4-5-20251001'),
     /** Anthropic: generación de respuestas conversacionales. Default Haiku 4.5. */
     RESPONSE_MODEL: z.string().default('claude-haiku-4-5-20251001'),
+    /** Anthropic: LLM-as-a-Judge del pipeline freeform_sql. Default Haiku 4.5. */
+    QUERY_JUDGE_MODEL: z.string().default('claude-haiku-4-5-20251001'),
 
     // OpenAI
     OPENAI_API_KEY: z
@@ -98,6 +100,22 @@ export const envSchema = z
     OPENAI_SUPERVISOR_MODEL: z.string().default('gpt-4o-mini'),
     /** OpenAI: generación de respuestas conversacionales. Default gpt-4o-mini. */
     OPENAI_RESPONSE_MODEL: z.string().default('gpt-4o-mini'),
+    /** OpenAI: LLM-as-a-Judge del pipeline freeform_sql. Default gpt-4o-mini. */
+    OPENAI_QUERY_JUDGE_MODEL: z.string().default('gpt-4o-mini'),
+
+    /**
+     * QueryJudge (freeform_sql): valida SQL post-ejecución + síntesis
+     * post-generación contra los rows reales. `ENABLED=true` por default
+     * (cutover directo sin piloto supervisado → la validación protege día 1).
+     * `FAIL_MODE` decide el verdict ante fallo del propio judge:
+     *   - `fail-open` (default): aprueba — no bloquear al usuario por error del judge.
+     *   - `fail-closed`: rechaza → degrada al fallback determinístico.
+     */
+    QUERY_JUDGE_ENABLED: z
+      .union([z.literal('true'), z.literal('false'), z.literal('').transform(() => 'true')])
+      .default('true')
+      .transform((v) => v === 'true'),
+    QUERY_JUDGE_FAIL_MODE: z.enum(['fail-open', 'fail-closed']).default('fail-open'),
 
     /**
      * Auth para el endpoint `/metrics` (H8.2). Si vacío, el endpoint NO se

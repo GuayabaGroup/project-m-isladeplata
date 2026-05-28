@@ -1,7 +1,10 @@
+import type { BaseMessage } from '@langchain/core/messages';
 import type { Logger } from 'winston';
 import { RESPONSE_CONFIG } from '../../../../config/llm.config.js';
 import type { Outcome } from '../../../../core/types/Outcome.js';
 import type { LlmProvider } from '../../../../infrastructure/llm/LlmProvider.js';
+import { type ConversationTurn, buildConversationHistory } from '../conversationHistory.js';
+import type { QueryJudge } from '../queryJudge.js';
 import { formatRowsAsDetails } from '../resultFormatter.js';
 import type { QueryDraftState } from '../state.js';
 
@@ -19,6 +22,8 @@ import type { QueryDraftState } from '../state.js';
 export interface SynthesizeResponseDeps {
   llm: LlmProvider;
   logger: Logger;
+  /** QueryJudge para validar la síntesis de freeform_sql. Undefined → skip. */
+  judge?: QueryJudge;
 }
 
 const RAW_RESULT_CHAR_CAP = 2000;
@@ -39,13 +44,15 @@ const CANNOT_ANSWER_FALLBACK =
   'No estoy seguro de poder responder eso. Si querés, podés preguntarme por precios, servicios o tus próximos turnos.';
 
 export function makeSynthesizeResponseNode(deps: SynthesizeResponseDeps) {
-  const { llm, logger } = deps;
+  const { llm, logger, judge } = deps;
 
   return async function synthesizeResponse(state: {
     subgraphState?: unknown;
+    messages?: BaseMessage[];
   }): Promise<Partial<QueryDraftState>> {
     const current = state.subgraphState as QueryDraftState | undefined;
     if (!current) return {};
+    const history = buildConversationHistory(state.messages);
 
     // Branch 1: cannot_answer (classifier no encontró intent válido).
     if (current.intent === 'cannot_answer') {
@@ -81,22 +88,56 @@ export function makeSynthesizeResponseNode(deps: SynthesizeResponseDeps) {
     }
 
     const rawJson = safeStringify(current.rawResult).slice(0, RAW_RESULT_CHAR_CAP);
-    const userPrompt = `Pregunta del usuario: "${current.userText.slice(0, 500)}"\n\nDatos disponibles:\n${rawJson}\n\nRespondé al usuario.`;
 
-    const response = await llm.complete({
-      ...RESPONSE_CONFIG,
-      maxTokens: 200,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: userPrompt }],
-    });
+    // Síntesis intento 1 (con historial para anáforas: "¿y la próxima?").
+    const first = await synthOnce(llm, current.userText, rawJson, history);
+    let text = first.length > 0 ? first : deterministicFallback(current);
 
-    const fallback = deterministicFallback(current);
-    const text = response.text.length > 0 ? response.text : fallback;
+    // Judge de síntesis — solo freeform_sql con rows reales + sql. Valida que la
+    // respuesta NL refleje los rows sin inventar. Rechazo → 1 retry con critique;
+    // doble rechazo (o LLM caído) → fallback determinístico formatRowsAsDetails
+    // (proyecta columnas del row, fidelidad por construcción §9).
+    const freeform = extractFreeformRows(current);
+    if (judge && first.length > 0 && freeform) {
+      const verdict = await judge.validateSynthesis({
+        question: current.userText,
+        sql: freeform.sql,
+        synthesisText: first,
+        rows: freeform.rows,
+        rowCount: freeform.rowCount,
+        history,
+      });
+      if (!verdict.approved) {
+        logger.info('query.synthesize: judge rejected synthesis, retrying with critique', {
+          reason: verdict.reason,
+          critiquePreview: verdict.critique.slice(0, 160),
+        });
+        const retry = await synthOnce(llm, current.userText, rawJson, history, {
+          previousSynthesis: first,
+          critique: verdict.critique,
+        });
+        if (retry.length === 0) {
+          text = formatRowsAsDetails(freeform.rows, freeform.rowCount);
+        } else {
+          const retryVerdict = await judge.validateSynthesis({
+            question: current.userText,
+            sql: freeform.sql,
+            synthesisText: retry,
+            rows: freeform.rows,
+            rowCount: freeform.rowCount,
+            history,
+          });
+          text = retryVerdict.approved
+            ? retry
+            : formatRowsAsDetails(freeform.rows, freeform.rowCount);
+        }
+      }
+    }
 
     logger.debug('query.synthesize', {
       intent: current.intent,
       length: text.length,
-      fallback: response.text.length === 0,
+      fallback: first.length === 0,
       hasGeneratedSql: !!current.generatedSql,
     });
 
@@ -106,6 +147,54 @@ export function makeSynthesizeResponseNode(deps: SynthesizeResponseDeps) {
     };
     return { phase: 'done', terminalOutcome };
   };
+}
+
+/** Bloque de historial para el prompt de síntesis (resolución de anáforas). */
+function historyBlock(history: ConversationTurn[] | undefined): string {
+  if (!history || history.length === 0) return '';
+  const lines = history
+    .map((t) => `[${t.role === 'user' ? 'USUARIO' : 'ASISTENTE'}]: ${t.content}`)
+    .join('\n');
+  return `\n\nHistorial reciente (para interpretar preguntas de seguimiento):\n${lines}`;
+}
+
+/** Una llamada de síntesis. Retorna '' si el LLM falla (caller decide fallback). */
+async function synthOnce(
+  llm: LlmProvider,
+  userText: string,
+  rawJson: string,
+  history: ConversationTurn[] | undefined,
+  retry?: { previousSynthesis: string; critique: string },
+): Promise<string> {
+  const retryBlock = retry
+    ? `\n\nTu respuesta anterior fue rechazada por un validador.\nRespuesta anterior: "${retry.previousSynthesis}"\nCrítica: ${retry.critique}\nCorregí la respuesta para que refleje SOLO los datos disponibles.`
+    : '';
+  const userPrompt = `Pregunta del usuario: "${userText.slice(0, 500)}"${historyBlock(history)}\n\nDatos disponibles:\n${rawJson}${retryBlock}\n\nRespondé al usuario.`;
+  const response = await llm.complete({
+    ...RESPONSE_CONFIG,
+    maxTokens: 200,
+    system: SYSTEM_PROMPT,
+    messages: [{ role: 'user', content: userPrompt }],
+  });
+  return response.text;
+}
+
+/**
+ * Extrae rows + rowCount + sql del rawResult de freeform_sql para el judge.
+ * Retorna null si no es freeform, no hay sql, o no hay rows ejecutados (sin
+ * rows no hay nada que validar — la síntesis va directo).
+ */
+function extractFreeformRows(
+  state: QueryDraftState,
+): { rows: Record<string, unknown>[]; rowCount: number; sql: string } | null {
+  if (state.intent !== 'freeform_sql' || !state.generatedSql) return null;
+  const result = state.rawResult as
+    | { rows?: Record<string, unknown>[]; rowCount?: number }
+    | undefined;
+  if (!result?.rows || result.rows.length === 0 || typeof result.rowCount !== 'number') {
+    return null;
+  }
+  return { rows: result.rows, rowCount: result.rowCount, sql: state.generatedSql };
 }
 
 function safeStringify(value: unknown): string {

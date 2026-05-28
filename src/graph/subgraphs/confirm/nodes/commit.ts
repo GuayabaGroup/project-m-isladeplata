@@ -4,8 +4,10 @@ import type { GuacucoClient } from '../../../../clients/GuacucoClient.js';
 import type { ConfirmAppointmentResult } from '../../../../clients/types/GuacucoTypes.js';
 import { ToolExecutionError } from '../../../../core/errors/ToolExecutionError.js';
 import type { Outcome } from '../../../../core/types/Outcome.js';
-import { assertSlotsResolvedGeneric } from '../../common/state.js';
+import { assertSlotsResolvedGeneric, toolCallErrorCode, withToolCall } from '../../common/state.js';
 import type { ConfirmDraftState } from '../state.js';
+
+const TOOL_NAME = 'confirm_appointment';
 
 /**
  * Commit del subgrafo confirm: llama `guacuco.confirmAppointment`. SIN gate
@@ -62,18 +64,28 @@ export function makeConfirmCommitNode(deps: ConfirmCommitDeps) {
     const apptUuid = current.slots.appointmentUuid.value as string;
     const idempotencyKey = randomUUID();
 
+    const input = { appointment_uuid: apptUuid };
     let result: ConfirmAppointmentResult;
     try {
-      result = await guacuco.confirmAppointment({ appointment_uuid: apptUuid }, { idempotencyKey });
+      result = await guacuco.confirmAppointment(input, { idempotencyKey });
     } catch (err) {
-      return handleError(err, logger);
+      const code = toolCallErrorCode(err);
+      return withToolCall(handleError(err, logger), {
+        toolName: TOOL_NAME,
+        input,
+        resultStatus: 'error',
+        ...(code ? { errorCode: code } : {}),
+      });
     }
 
     logger.debug('confirm.commit success', {
       appointmentUuid: result.appointment_uuid,
       status: result.status,
     });
-    return { phase: 'done' };
+    return withToolCall<Partial<ConfirmDraftState>>(
+      { phase: 'done' },
+      { toolName: TOOL_NAME, input, resultStatus: 'ok' },
+    );
   };
 }
 

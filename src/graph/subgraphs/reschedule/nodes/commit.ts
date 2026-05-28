@@ -3,8 +3,10 @@ import type { GuacucoClient } from '../../../../clients/GuacucoClient.js';
 import type { RescheduleAppointmentResult } from '../../../../clients/types/GuacucoTypes.js';
 import { ToolExecutionError } from '../../../../core/errors/ToolExecutionError.js';
 import type { Outcome } from '../../../../core/types/Outcome.js';
-import { assertSlotsResolvedGeneric } from '../../common/state.js';
+import { assertSlotsResolvedGeneric, toolCallErrorCode, withToolCall } from '../../common/state.js';
 import { RESCHEDULE_REQUIRED_SLOTS, type RescheduleDraftState } from '../state.js';
+
+const TOOL_NAME = 'reschedule_appointment';
 
 /**
  * Commit del subgrafo reschedule. Llama `guacuco.rescheduleAppointment` con
@@ -88,22 +90,29 @@ export function makeRescheduleCommitNode(deps: RescheduleCommitDeps) {
     const apptUuid = current.slots.appointmentUuid.value as string;
     const newDate = current.slots.newDate.value as string;
     const newTime = current.slots.newTime.value as string;
+    const input = { appointment_uuid: apptUuid, new_date: newDate, new_time: newTime };
 
     let result: RescheduleAppointmentResult;
     try {
-      result = await guacuco.rescheduleAppointment(
-        { appointment_uuid: apptUuid, new_date: newDate, new_time: newTime },
-        { idempotencyKey: intentUuid },
-      );
+      result = await guacuco.rescheduleAppointment(input, { idempotencyKey: intentUuid });
     } catch (err) {
-      return handleError(err, current, logger);
+      const code = toolCallErrorCode(err);
+      return withToolCall(handleError(err, current, logger), {
+        toolName: TOOL_NAME,
+        input,
+        resultStatus: 'error',
+        ...(code ? { errorCode: code } : {}),
+      });
     }
 
     logger.debug('reschedule.commit success', {
       appointmentUuid: result.appointment_uuid,
       status: result.status,
     });
-    return { phase: 'done' };
+    return withToolCall<Partial<RescheduleDraftState>>(
+      { phase: 'done' },
+      { toolName: TOOL_NAME, input, resultStatus: 'ok' },
+    );
   };
 }
 

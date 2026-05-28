@@ -1,3 +1,4 @@
+import type { BaseMessage } from '@langchain/core/messages';
 import type { Logger } from 'winston';
 import type { GuacucoClient } from '../../../../clients/GuacucoClient.js';
 import type {
@@ -11,7 +12,13 @@ import type { CrmContext } from '../../../../core/types/CrmContext.js';
 import type { Identity } from '../../../../core/types/Identity.js';
 import type { Outcome } from '../../../../core/types/Outcome.js';
 import type { LlmProvider } from '../../../../infrastructure/llm/LlmProvider.js';
+import {
+  type ConversationTurn,
+  buildConversationHistory,
+  historyLooksLikeDrilldown,
+} from '../conversationHistory.js';
 import { buildSqlGenerationPrompt, buildTemporalContext } from '../prompts/querySql.js';
+import type { QueryJudge } from '../queryJudge.js';
 import { truncateResultsForSynthesis } from '../resultTruncator.js';
 import { resolveAllowedSchema } from '../schemaResolver.js';
 import { validateSql } from '../sqlValidator.js';
@@ -32,6 +39,8 @@ export interface FetchIntentDeps {
   guacuco: GuacucoClient;
   llm: LlmProvider;
   logger: Logger;
+  /** QueryJudge para freeform_sql. Undefined → judge deshabilitado (skip). */
+  judge?: QueryJudge;
 }
 
 const FORBIDDEN_OUTCOME: Outcome = {
@@ -69,7 +78,7 @@ interface SqlGenerationResult {
 }
 
 export function makeFetchIntentNode(deps: FetchIntentDeps) {
-  const { guacuco, llm, logger } = deps;
+  const { guacuco, llm, logger, judge } = deps;
   // Schema cache per (profileType:roleId) — singleton del closure del factory.
   const schemaCache = new Map<string, CachedSchema>();
 
@@ -77,6 +86,7 @@ export function makeFetchIntentNode(deps: FetchIntentDeps) {
     identity?: Identity | null;
     catalog?: CatalogState;
     crmContext?: CrmContext;
+    messages?: BaseMessage[];
     subgraphState?: unknown;
   }): Promise<Partial<QueryDraftState>> {
     const current = state.subgraphState as QueryDraftState | undefined;
@@ -101,7 +111,7 @@ export function makeFetchIntentNode(deps: FetchIntentDeps) {
       case 'my_upcoming': {
         const upcomings = crmContext.upcomingAppointments.map((a) => ({
           description: a.description,
-          startAt: a.startAt,
+          ...(a.startAt ? { startAt: a.startAt } : {}),
         }));
         return { rawResult: { upcomings }, phase: 'synthesizing' };
       }
@@ -140,6 +150,8 @@ export function makeFetchIntentNode(deps: FetchIntentDeps) {
           llm,
           logger,
           schemaCache,
+          judge,
+          history: buildConversationHistory(state.messages),
         });
       }
 
@@ -160,10 +172,22 @@ interface FreeformDeps {
   llm: LlmProvider;
   logger: Logger;
   schemaCache: Map<string, CachedSchema>;
+  judge?: QueryJudge;
+  history?: ConversationTurn[];
 }
 
+// Instrucción forzada para el retry drill-down (cuando el generador rechazó como
+// no answerable pero el historial revela un follow-up sobre datos previos).
+const DRILLDOWN_RETRY_CONTEXT = [
+  'DRILL-DOWN RETRY: el turno anterior del asistente respondió con datos',
+  'cuantitativos. La PREGUNTA ACTUAL es un drill-down sobre esos mismos registros.',
+  'NO respondas answerable:false. Heredá WHERE y rango temporal del último turno',
+  'del USUARIO en el historial y proyectá columnas descriptivas adicionales',
+  '(staff_name, service_name, fecha, hora, status) sobre el mismo WHERE.',
+].join(' ');
+
 async function runFreeformSql(deps: FreeformDeps): Promise<Partial<QueryDraftState>> {
-  const { state, identity, guacuco, llm, logger, schemaCache } = deps;
+  const { state, identity, guacuco, llm, logger, schemaCache, judge, history } = deps;
 
   if (!identity) {
     return { phase: 'failed', terminalOutcome: FETCH_ERROR_OUTCOME };
@@ -196,7 +220,7 @@ async function runFreeformSql(deps: FreeformDeps): Promise<Partial<QueryDraftSta
     };
   }
 
-  // 3. Generar SQL con LLM (1 retry on execute error después).
+  // 3. Generar SQL con LLM (con historial para anáforas).
   const temporal = buildTemporalContext(identity.timezone ?? 'UTC');
   let genResult = await generateSql({
     question: state.userText,
@@ -206,7 +230,31 @@ async function runFreeformSql(deps: FreeformDeps): Promise<Partial<QueryDraftSta
     temporal,
     llm,
     logger,
+    history,
   });
+
+  // 3b. Drill-down retry: si rechazó como no answerable pero el historial
+  // contiene una respuesta cuantitativa previa, el usuario está haciendo
+  // drill-down ("dame detalles", "con quién"). Un único retry forzando la
+  // interpretación recupera estos casos sin ciclar (port IDP_OV1).
+  if (!genResult.answerable && historyLooksLikeDrilldown(history)) {
+    logger.info('query.freeform: drilldown_retry', {
+      originalReason: genResult.reason?.slice(0, 120),
+    });
+    const retry = await generateSql({
+      question: state.userText,
+      schemaText,
+      identity,
+      allowedSchema,
+      temporal,
+      llm,
+      logger,
+      history,
+      errorContext: DRILLDOWN_RETRY_CONTEXT,
+    });
+    if (retry.answerable && retry.sql) genResult = retry;
+    else if (retry.reason) genResult = retry;
+  }
 
   if (!genResult.answerable) {
     return {
@@ -266,6 +314,7 @@ async function runFreeformSql(deps: FreeformDeps): Promise<Partial<QueryDraftSta
       llm,
       logger,
       errorContext: retryContext,
+      history,
     });
 
     if (!genResult.answerable || !genResult.sql) {
@@ -302,7 +351,48 @@ async function runFreeformSql(deps: FreeformDeps): Promise<Partial<QueryDraftSta
     }
   }
 
-  // 6. Truncar resultados antes de sintetizar.
+  // 6. Judge SQL post-ejecución (si habilitado). Valida correctitud semántica,
+  // filtro de perfil obligatorio, coherencia de resultados y alineación con el
+  // schema. Si rechaza, regenera UNA vez con el critique como feedback y
+  // re-ejecuta; no re-juzga (evita ciclos). Ante fallo del retry, conserva el
+  // resultado original (rows reales validados por las 5 capas + server-side).
+  if (judge) {
+    const verdict = await judge.validateSql({
+      question: state.userText,
+      sql,
+      schemaText,
+      profileType: identity.profileType,
+      profileUuid: identity.profileUuid,
+      rows: result.rows,
+      rowCount: result.rowCount,
+      history,
+    });
+    if (!verdict.approved) {
+      logger.info('query.freeform: judge rejected SQL, retrying with critique', {
+        reason: verdict.reason,
+        critiquePreview: verdict.critique.slice(0, 160),
+      });
+      const retried = await regenerateAndExecuteWithCritique({
+        state,
+        identity,
+        guacuco,
+        llm,
+        logger,
+        schemaText,
+        allowedSchema,
+        temporal,
+        previousSql: sql,
+        critique: verdict.critique,
+        history,
+      });
+      if (retried) {
+        sql = retried.sql;
+        result = retried.result;
+      }
+    }
+  }
+
+  // 7. Truncar resultados antes de sintetizar.
   const truncation = truncateResultsForSynthesis(result.rows);
   if (truncation.wasTruncated) {
     logger.info('query.freeform: results truncated', {
@@ -322,6 +412,67 @@ async function runFreeformSql(deps: FreeformDeps): Promise<Partial<QueryDraftSta
   };
 }
 
+/**
+ * Regenera SQL con el critique del judge como feedback, valida localmente y
+ * ejecuta. Retorna `{sql, result}` si todo el ciclo pasa, o `null` si cualquier
+ * paso falla (el caller conserva entonces el resultado original). No re-juzga.
+ */
+async function regenerateAndExecuteWithCritique(args: {
+  state: QueryDraftState;
+  identity: Identity;
+  guacuco: GuacucoClient;
+  llm: LlmProvider;
+  logger: Logger;
+  schemaText: string;
+  allowedSchema: string;
+  temporal: ReturnType<typeof buildTemporalContext>;
+  previousSql: string;
+  critique: string;
+  history?: ConversationTurn[];
+}): Promise<{ sql: string; result: QueryProcessorExecuteResponse } | null> {
+  const { state, identity, guacuco, llm, logger, schemaText, allowedSchema, temporal } = args;
+  const critiqueContext = [
+    'El judge rechazó la query previa:',
+    '```sql',
+    args.previousSql,
+    '```',
+    `Crítica: ${args.critique}`,
+    '',
+    'Generá una SQL corregida que resuelva la crítica.',
+  ].join('\n');
+
+  const gen = await generateSql({
+    question: state.userText,
+    schemaText,
+    identity,
+    allowedSchema,
+    temporal,
+    llm,
+    logger,
+    errorContext: critiqueContext,
+    history: args.history,
+  });
+  if (!gen.answerable || !gen.sql) return null;
+
+  const validation = validateSql(gen.sql, allowedSchema);
+  if (!validation.valid) {
+    logger.warn('query.freeform: judge-retry SQL failed local validation', {
+      error: validation.error,
+    });
+    return null;
+  }
+
+  try {
+    const result = await guacuco.executeQuery(gen.sql, identity.profileType, identity.roleId);
+    return { sql: gen.sql, result };
+  } catch (err) {
+    logger.warn('query.freeform: judge-retry executeQuery failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
 async function generateSql(args: {
   question: string;
   schemaText: string;
@@ -331,9 +482,19 @@ async function generateSql(args: {
   llm: LlmProvider;
   logger: Logger;
   errorContext?: string;
+  history?: ConversationTurn[];
 }): Promise<SqlGenerationResult> {
-  const { question, schemaText, identity, allowedSchema, temporal, llm, logger, errorContext } =
-    args;
+  const {
+    question,
+    schemaText,
+    identity,
+    allowedSchema,
+    temporal,
+    llm,
+    logger,
+    errorContext,
+    history,
+  } = args;
   const prompt = buildSqlGenerationPrompt(
     question,
     schemaText,
@@ -342,6 +503,7 @@ async function generateSql(args: {
     MAX_SQL_ROWS,
     temporal,
     errorContext,
+    history,
   );
 
   try {

@@ -10,6 +10,12 @@
 
 ### QueryJudge (LLM extra validador post-ejecución)
 
+> **✅ IMPLEMENTADO (2026-05-28)** — port en `src/graph/subgraphs/query/queryJudge.ts`
+> (`validateSql` + `validateSynthesis`, fail-open/closed por env). Wireado en
+> `fetchIntent` (retry por critique) y `synthesizeResponse` (retry + fallback
+> determinístico). Opt-in vía `QUERY_JUDGE_ENABLED` (default true). Decisión:
+> el cutover directo sin piloto supervisado eliminó la razón para diferirlo.
+
 **Qué es**: un LLM secundario (Haiku) que valida tanto la SQL generada vs el
 schema+intención como la síntesis vs los rows ejecutados. Si rechaza, fuerza
 retry con su `critique` como feedback al generador.
@@ -28,6 +34,10 @@ incorrectas o alucinadas en freeform_sql (≥5%) durante piloto.
 ---
 
 ### Drill-down retry
+
+> **✅ IMPLEMENTADO (2026-05-28)** — `historyLooksLikeDrilldown` en
+> `conversationHistory.ts` + retry forzado en `fetchIntent` + bloque DRILL-DOWN
+> en `prompts/querySql.ts`. Depende del historial (ver Anáforas, ya implementado).
 
 **Qué es**: detección de imperativos cortos sin verbo ("dame detalles",
 "con quien", "que servicios", "fechas") que continúan la consulta previa.
@@ -49,6 +59,11 @@ rechazados.
 ---
 
 ### Anáforas (history en prompt SQL + synthesis)
+
+> **✅ IMPLEMENTADO (2026-05-28)** — `state.messages` ahora se puebla en el
+> `subgraphFinalize` compartido (par user/assistant por turno). `fetchIntent` y
+> `synthesizeResponse` construyen el historial con `buildConversationHistory`
+> (últimos 6 turnos) y lo inyectan a generación SQL, síntesis y ambos judges.
 
 **Qué es**: inyectar los últimos N turnos (IDP_OV1 usa 6) al prompt de
 `generateSql` y `synthesizeResponse` para resolver pronombres y

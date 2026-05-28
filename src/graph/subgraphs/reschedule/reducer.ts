@@ -1,3 +1,4 @@
+import { mergeSubgraphMeta } from '../common/state.js';
 import type { RescheduleDraftState } from './state.js';
 
 /**
@@ -22,10 +23,7 @@ export function rescheduleSubgraphReducer(current: unknown, next: unknown): unkn
     slots: { ...c.slots, ...(n.slots ?? {}) },
     confirmation: n.confirmation !== undefined ? n.confirmation : c.confirmation,
     availability: n.availability !== undefined ? n.availability : c.availability,
-    meta: {
-      attempts: c.meta.attempts + (n.meta?.attempts ?? 0),
-      recoverableErrors: [...c.meta.recoverableErrors, ...(n.meta?.recoverableErrors ?? [])],
-    },
+    meta: mergeSubgraphMeta(c.meta, n.meta),
     ...(n.terminalOutcome !== undefined ? { terminalOutcome: n.terminalOutcome } : {}),
   };
 }

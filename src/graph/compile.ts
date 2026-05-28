@@ -8,6 +8,8 @@ import {
 } from '@langchain/langgraph';
 import type { Logger } from 'winston';
 import type { GuacucoClient } from '../clients/GuacucoClient.js';
+import { env } from '../config/env.js';
+import { QUERY_JUDGE_CONFIG } from '../config/llm.config.js';
 import { IdpError } from '../core/errors/IdpError.js';
 import type { Outcome } from '../core/types/Outcome.js';
 import type { LlmProvider } from '../infrastructure/llm/LlmProvider.js';
@@ -33,6 +35,7 @@ import { type ConfirmDraftState, initialConfirmDraftState } from './subgraphs/co
 import { makeClassifyQueryNode } from './subgraphs/query/nodes/classifyQuery.js';
 import { makeFetchIntentNode } from './subgraphs/query/nodes/fetchIntent.js';
 import { makeSynthesizeResponseNode } from './subgraphs/query/nodes/synthesizeResponse.js';
+import { QueryJudge } from './subgraphs/query/queryJudge.js';
 import { type QueryDraftState, initialQueryDraftState } from './subgraphs/query/state.js';
 // Reschedule subgraph (H6)
 import { makeRescheduleAskSlotNode } from './subgraphs/reschedule/nodes/askSlot.js';
@@ -163,10 +166,22 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
   const rescheduleCommit = makeRescheduleCommitNode({ guacuco, logger });
   const rescheduleSuccess = makeRescheduleSuccessNode({ llm, logger });
 
-  // Query nodes (H7)
+  // Query nodes (H7). QueryJudge (freeform_sql) opt-in vía env; undefined → skip.
+  const queryJudge = env.QUERY_JUDGE_ENABLED
+    ? new QueryJudge(llm, logger, QUERY_JUDGE_CONFIG)
+    : undefined;
   const queryClassify = makeClassifyQueryNode({ llm, logger });
-  const queryFetch = makeFetchIntentNode({ guacuco, llm, logger });
-  const querySynthesize = makeSynthesizeResponseNode({ llm, logger });
+  const queryFetch = makeFetchIntentNode({
+    guacuco,
+    llm,
+    logger,
+    ...(queryJudge ? { judge: queryJudge } : {}),
+  });
+  const querySynthesize = makeSynthesizeResponseNode({
+    llm,
+    logger,
+    ...(queryJudge ? { judge: queryJudge } : {}),
+  });
 
   // Finalize compartido entre los 3 subgrafos.
   const subgraphFinalize = makeSubgraphFinalizeNode({ logger });

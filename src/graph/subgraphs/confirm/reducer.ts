@@ -1,3 +1,4 @@
+import { mergeSubgraphMeta } from '../common/state.js';
 import type { ConfirmDraftState } from './state.js';
 
 /**
@@ -16,10 +17,7 @@ export function confirmSubgraphReducer(current: unknown, next: unknown): unknown
     ...c,
     ...n,
     slots: { ...c.slots, ...(n.slots ?? {}) },
-    meta: {
-      attempts: c.meta.attempts + (n.meta?.attempts ?? 0),
-      recoverableErrors: [...c.meta.recoverableErrors, ...(n.meta?.recoverableErrors ?? [])],
-    },
+    meta: mergeSubgraphMeta(c.meta, n.meta),
     ...(n.terminalOutcome !== undefined ? { terminalOutcome: n.terminalOutcome } : {}),
   };
 }

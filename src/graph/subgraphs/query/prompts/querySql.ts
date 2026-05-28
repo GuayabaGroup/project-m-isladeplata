@@ -1,7 +1,6 @@
 /**
- * Prompt para generación de SQL (freeform_sql). Port simplificado de IDP_OV1
- * `src/conversation/prompts/query-sql.ts`. Sin sección de drill-down ni
- * anáforas (iter 1).
+ * Prompt para generación de SQL (freeform_sql). Port de IDP_OV1
+ * `src/conversation/prompts/query-sql.ts`.
  *
  * Reglas heredadas:
  * - Información temporal inyectada (currentDate, dayOfWeek).
@@ -11,10 +10,13 @@
  * - GROUP BY/ORDER BY rules.
  * - unaccent() para búsquedas en español.
  * - INTERVAL para aritmética de fechas; sin CURRENT_TIMESTAMP / NOW().
+ * - Historial reciente para resolver ANÁFORAS ("¿y la próxima?", "el último")
+ *   + DRILL-DOWN (imperativos cortos heredan WHERE+rango, ajustan SELECT).
  * - Output JSON estricto: {answerable: true, sql} o {answerable: false, reason}.
  */
 
 import type { Identity } from '../../../../core/types/Identity.js';
+import type { ConversationTurn } from '../conversationHistory.js';
 
 export interface SqlGenerationPrompt {
   systemPrompt: string;
@@ -42,11 +44,13 @@ export function buildSqlGenerationPrompt(
   maxRows: number,
   temporal: TemporalContext,
   errorContext?: string,
+  conversationHistory?: ConversationTurn[],
 ): SqlGenerationPrompt {
   const isClient = identity.profileType === 'client';
   const tenantName = identity.tenantName ?? 'el negocio';
   const cd = temporal.currentDate;
   const dow = temporal.dayOfWeek;
+  const profileCol = isClient ? 'client_uuid' : 'staff_uuid';
 
   const profileFilterRule = isClient
     ? `Siempre filtrá por client_uuid en el WHERE cuando la tabla tenga client_uuid.
@@ -75,6 +79,67 @@ NO retornes {"answerable": false, "reason": "falta especificar el cliente"} en e
 "tengo", "mis", "yo", "mis clientes" → WHERE staff_uuid = '${identity.profileUuid}'.
 NO retornes {"answerable": false, "reason": "falta especificar staff/cliente"} en estos casos.`;
 
+  // --- Historial reciente para resolver anáforas + drill-down ---
+  // Sin este bloque, los follow-ups cortos ("¿y la próxima?", "dame detalles")
+  // caen en answerable:false porque el LLM responde conversacionalmente en vez
+  // de heredar el sujeto/rango del turno previo.
+  const historyBlock =
+    conversationHistory && conversationHistory.length > 0
+      ? `HISTORIAL RECIENTE DE LA CONVERSACIÓN (para resolver referencias):
+${conversationHistory
+  .map((turn) => `[${turn.role === 'user' ? 'USUARIO' : 'ASISTENTE'}]: ${turn.content}`)
+  .join('\n')}
+
+REGLA DE REFERENCIAS (ANÁFORAS):
+Si la PREGUNTA ACTUAL usa pronombres o determinantes que dependen del historial
+("cuáles son", "esos", "ese", "el último", "los de antes", "¿y la próxima?",
+"¿y en abril?", "¿y mañana?"), interpretá la pregunta heredando el SUJETO del
+ÚLTIMO TURNO DEL USUARIO y SOLO cambiando el rango (tiempo/scope). Las
+respuestas del ASISTENTE — incluso negativas ("no tenés X", "no hay Y",
+"0 resultados") — NO redefinen ni invalidan el sujeto heredado; solo informan
+el resultado previo y deben IGNORARSE al determinar el sujeto. Buscá hacia atrás
+hasta el último turno del USUARIO y usá ESE como fuente del sujeto. Si el usuario
+hablaba de sí mismo, el sujeto sigue siendo el usuario del CONTEXTO DE IDENTIDAD
+(usá su ${profileCol} directamente). SIEMPRE generá SQL — no pidas aclaración.
+
+Ejemplos:
+- [USUARIO]: "¿cuántos turnos confirmados tengo esta semana?" → actual: "¿y la que viene?"
+  ⇒ "¿cuántos turnos confirmados tengo la próxima semana?"
+     WHERE ${profileCol} = '${identity.profileUuid}' AND status = 'confirmed' AND (rango próxima semana)
+- [USUARIO]: "¿cuánto facturé en marzo?" → actual: "¿y en abril?"
+  ⇒ heredar sujeto (usuario) + cambiar rango (marzo → abril).
+- [USUARIO]: "¿cuántas citas tengo esta semana?" / [ASISTENTE]: "No tenés citas." → actual: "¿y la próxima?"
+  ⇒ "¿cuántas citas tengo la próxima semana?" (el sujeto se hereda del USUARIO, NO de la negación del asistente).
+
+DRILL-DOWN (mismo sujeto/rango, cambian las COLUMNAS proyectadas):
+Si la PREGUNTA ACTUAL pide ATRIBUTOS/DETALLES de los mismos registros de la
+consulta previa, usá la MISMA query base (mismo WHERE, mismo rango) pero
+agregando columnas descriptivas al SELECT (staff name, servicio, fecha, hora,
+status). NO cambies WHERE, rango ni sujeto — solo el SELECT.
+
+PATRONES DE DRILL-DOWN (cuando el historial tiene una respuesta del asistente con
+dato cuantitativo: "tenés N", "hay N", "N turnos"):
+- Imperativos cortos: "dame detalles", "detalles", "contame", "mostrame", "más info".
+- Fragmentos de columnas: "con quién", "a qué hora", "qué servicios", "qué clientes",
+  "cuándo", "fechas", "horarios", "quién atiende".
+- Combinaciones: "con quién y qué servicios", "fecha y hora", "sobre los N turnos".
+Para cada uno, heredá sujeto+rango del último turno del USUARIO y proyectá las
+columnas descriptivas pedidas sobre el MISMO WHERE.
+
+Ejemplo drill-down:
+- [USUARIO]: "¿cuántos agendamientos tengo este mes?" / [ASISTENTE]: "Tenés 2 este mes."
+  actual: "decime con quién y qué servicios"
+  ⇒ SELECT fecha, <staff_name>, <service_name> FROM ${allowedSchema}.<vista_turnos>
+     WHERE ${profileCol} = '${identity.profileUuid}'
+       AND fecha >= DATE_TRUNC('month', DATE '${cd}')
+       AND fecha <  DATE_TRUNC('month', DATE '${cd}') + INTERVAL '1 month'
+     ORDER BY fecha LIMIT ${maxRows}
+
+PROHIBIDO responder {"answerable": false, "reason": "ambigua"} cuando el historial
+contiene una consulta previa del USUARIO y la actual pide detalles/atributos sobre
+esos mismos registros. En ese caso SIEMPRE regenerá SQL heredando el WHERE.`
+      : '';
+
   // Pre-compute "esta/próxima semana" offsets (0=Lun … 6=Dom).
   const toNextMon = 7 - dow;
   const toNextSun = 13 - dow;
@@ -89,7 +154,7 @@ Si tu query tiene GROUP BY, TODA columna en ORDER BY DEBE:
 
 ${identityBlock}
 
-${firstPersonRule}
+${historyBlock ? `${historyBlock}\n\n` : ''}${firstPersonRule}
 
 INFORMACIÓN TEMPORAL:
 - Año actual: ${cd.slice(0, 4)}
@@ -104,7 +169,7 @@ REGLAS:
 1. ${profileFilterRule}
 2. ESTRICTO: Usá ÚNICAMENTE nombres exactos de tablas y columnas del esquema. NO inventes columnas. Si una columna no existe en el esquema, NO la uses.
 3. Incluí LIMIT ${maxRows} por defecto.
-4. Si la pregunta no es clara y NO hay primera persona ni contexto temporal heredable, devolvé {"answerable": false, "reason": "..."}.
+4. Si la pregunta no es clara, devolvé {"answerable": false, "reason": "..."}. EXCEPCIONES — NO son ambiguas: (a) primera persona ("tengo", "mis", "yo") → usá el UUID propio; (b) anáfora corta ("¿y la próxima?", "¿y en abril?") con historial → heredá sujeto + nuevo rango (ver REGLA DE REFERENCIAS); (c) drill-down ("dame detalles", "con quién", "qué servicios") con respuesta previa cuantitativa → heredá WHERE+rango y proyectá columnas (ver DRILL-DOWN).
 5. Si la pregunta no tiene relación con la BD, devolvé {"answerable": false, "reason": "..."}.
 6. Si el usuario no indica un año, usá el año actual (${cd.slice(0, 4)}).
 7. Para SELECT, usá solo columnas marcadas como DATO_LECTURA en comentarios del esquema. Las sin marca son internas/sistema.

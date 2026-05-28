@@ -24,6 +24,10 @@ function responseModel(): string {
   return env.LLM_PROVIDER === 'openai' ? env.OPENAI_RESPONSE_MODEL : env.RESPONSE_MODEL;
 }
 
+function judgeModel(): string {
+  return env.LLM_PROVIDER === 'openai' ? env.OPENAI_QUERY_JUDGE_MODEL : env.QUERY_JUDGE_MODEL;
+}
+
 export const SUPERVISOR_CONFIG = {
   model: supervisorModel(),
   temperature: 0.2,
@@ -40,6 +44,17 @@ export const SOCIAL_CONFIG = {
   model: responseModel(),
   temperature: 0.7,
   maxTokens: 150,
+} as const;
+
+/**
+ * QueryJudge (freeform_sql). Temperatura 0 (veredicto determinístico),
+ * maxTokens moderado (JSON con critique). `failMode` desde env. Ver §11.2.
+ */
+export const QUERY_JUDGE_CONFIG = {
+  model: judgeModel(),
+  temperature: 0,
+  maxTokens: 512,
+  failMode: env.QUERY_JUDGE_FAIL_MODE,
 } as const;
 
 export type LlmConfig = typeof SUPERVISOR_CONFIG;

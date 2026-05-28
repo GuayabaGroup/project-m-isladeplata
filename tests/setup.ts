@@ -59,6 +59,12 @@ process.env.RESPONSE_MODEL = process.env.RESPONSE_MODEL ?? 'claude-haiku-4-5-202
 process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? 'test-openai-key';
 process.env.OPENAI_SUPERVISOR_MODEL = process.env.OPENAI_SUPERVISOR_MODEL ?? 'gpt-4o-mini';
 process.env.OPENAI_RESPONSE_MODEL = process.env.OPENAI_RESPONSE_MODEL ?? 'gpt-4o-mini';
+// QueryJudge (freeform_sql) — todas con default en env.ts; explícitas acá para
+// que los tests puedan overridear ENABLED/FAIL_MODE antes del import.
+process.env.QUERY_JUDGE_MODEL = process.env.QUERY_JUDGE_MODEL ?? 'claude-haiku-4-5-20251001';
+process.env.OPENAI_QUERY_JUDGE_MODEL = process.env.OPENAI_QUERY_JUDGE_MODEL ?? 'gpt-4o-mini';
+process.env.QUERY_JUDGE_ENABLED = process.env.QUERY_JUDGE_ENABLED ?? 'true';
+process.env.QUERY_JUDGE_FAIL_MODE = process.env.QUERY_JUDGE_FAIL_MODE ?? 'fail-open';
 
 // Metrics (H8.2) — vacío en tests para no exponer endpoint por default.
 // Tests específicos del endpoint setean el valor antes de instanciar el handler.

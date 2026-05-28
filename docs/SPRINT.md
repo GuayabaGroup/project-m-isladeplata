@@ -273,10 +273,12 @@ classify + fetch + synthesize + helpers + freeform). Total suite: 544 verdes.
 - 25 tests nuevos (6 maskPII + 9 ConversationPersister + 3 GuacucoClient + 7 pipeline).
   Total suite: **569 verdes** (vs 544 al cierre de H7).
 
-**Pendiente para H8.2+ (futuro)**:
-- `tool_calls[]` en assistant turn — placeholder vacío. Requiere instrumentar
-  los commits de los subgrafos (schedule/confirm/cancel/reschedule) para registrar
-  qué tools se ejecutaron y su `result_status`.
+**`tool_calls[]` ✅ (instrumentado 2026-05-28)**: los commits de los 4 subgrafos
+write registran la tool ejecutada (`ToolCallRecord {toolName, input, resultStatus,
+errorCode?}`) acumulada en `subgraphState.meta.toolCalls`; el `subgraphFinalize`
+la propaga al `outcome`, el pipeline la pasa al `ConversationPersister`, que la
+mapea al shape Guacuco (`tool_name/input/result_status/error_code`). El subgrafo
+`query` (read-only SQL) queda fuera por ahora — no muta el negocio.
 
 ### H8.2 — Métricas + Sentry Performance ✅
 

@@ -1,4 +1,5 @@
 import type { OutcomeAction } from '../enums/OutcomeAction.js';
+import type { ToolCallRecord } from './ToolCall.js';
 
 export interface OutboundButton {
   id: string;
@@ -33,4 +34,9 @@ export interface OutboundReply {
 export interface Outcome {
   action: OutcomeAction;
   pendingReply?: OutboundReply;
+  /**
+   * Tools de Guacuco ejecutadas en el turno (set por `finalize` desde
+   * `subgraphState.meta.toolCalls`). El pipeline las pasa al persister (P2).
+   */
+  toolCalls?: ToolCallRecord[];
 }

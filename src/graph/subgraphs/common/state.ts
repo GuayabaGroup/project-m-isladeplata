@@ -7,6 +7,8 @@
  */
 
 import { IdpError } from '../../../core/errors/IdpError.js';
+import { ToolExecutionError } from '../../../core/errors/ToolExecutionError.js';
+import type { ToolCallRecord } from '../../../core/types/ToolCall.js';
 
 export type SubgraphKind = 'schedule' | 'confirm' | 'cancel' | 'reschedule' | 'query';
 
@@ -24,9 +26,50 @@ export interface SlotState<TValue> {
 export interface SubgraphMeta {
   attempts: number;
   recoverableErrors: string[];
+  /** Tools de Guacuco ejecutadas en el turno (acumuladas por `mergeSubgraphMeta`). */
+  toolCalls?: ToolCallRecord[];
 }
 
 export const EMPTY_META: SubgraphMeta = { attempts: 0, recoverableErrors: [] };
+
+/**
+ * Merge canónico de `meta` para los reducers de subgrafo: `attempts` SUMA,
+ * `recoverableErrors` y `toolCalls` APPEND. Centraliza la semántica que los 4
+ * reducers de write compartían inline.
+ */
+export function mergeSubgraphMeta(
+  current: SubgraphMeta,
+  next?: Partial<SubgraphMeta>,
+): SubgraphMeta {
+  const merged: SubgraphMeta = {
+    attempts: current.attempts + (next?.attempts ?? 0),
+    recoverableErrors: [...current.recoverableErrors, ...(next?.recoverableErrors ?? [])],
+  };
+  const toolCalls = [...(current.toolCalls ?? []), ...(next?.toolCalls ?? [])];
+  if (toolCalls.length > 0) merged.toolCalls = toolCalls;
+  return merged;
+}
+
+/**
+ * Agrega un `ToolCallRecord` al delta `meta` de un parcial retornado por un
+ * nodo `commit_*`. El reducer luego appendea al acumulado del turno. Preserva
+ * `attempts`/`recoverableErrors` que el parcial ya traiga.
+ */
+export function withToolCall<S extends { meta?: SubgraphMeta }>(
+  partial: S,
+  record: ToolCallRecord,
+): S {
+  const base: SubgraphMeta = partial.meta ?? { attempts: 0, recoverableErrors: [] };
+  return {
+    ...partial,
+    meta: { ...base, toolCalls: [...(base.toolCalls ?? []), record] },
+  };
+}
+
+/** Código de error de Guacuco si el error es un `ToolExecutionError`. */
+export function toolCallErrorCode(err: unknown): string | undefined {
+  return err instanceof ToolExecutionError ? err.code : undefined;
+}
 
 /**
  * Asserción genérica anti-alucinación: lanza `IdpError('invariant_violated')`

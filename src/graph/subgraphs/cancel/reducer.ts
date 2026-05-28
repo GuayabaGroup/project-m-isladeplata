@@ -1,3 +1,4 @@
+import { mergeSubgraphMeta } from '../common/state.js';
 import type { CancelDraftState } from './state.js';
 
 /**
@@ -18,10 +19,7 @@ export function cancelSubgraphReducer(current: unknown, next: unknown): unknown 
     ...n,
     slots: { ...c.slots, ...(n.slots ?? {}) },
     confirmation: n.confirmation !== undefined ? n.confirmation : c.confirmation,
-    meta: {
-      attempts: c.meta.attempts + (n.meta?.attempts ?? 0),
-      recoverableErrors: [...c.meta.recoverableErrors, ...(n.meta?.recoverableErrors ?? [])],
-    },
+    meta: mergeSubgraphMeta(c.meta, n.meta),
     ...(n.terminalOutcome !== undefined ? { terminalOutcome: n.terminalOutcome } : {}),
   };
 }

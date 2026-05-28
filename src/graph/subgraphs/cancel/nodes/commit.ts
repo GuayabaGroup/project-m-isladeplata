@@ -3,8 +3,10 @@ import type { GuacucoClient } from '../../../../clients/GuacucoClient.js';
 import type { CancelAppointmentResult } from '../../../../clients/types/GuacucoTypes.js';
 import { ToolExecutionError } from '../../../../core/errors/ToolExecutionError.js';
 import type { Outcome } from '../../../../core/types/Outcome.js';
-import { assertSlotsResolvedGeneric } from '../../common/state.js';
+import { assertSlotsResolvedGeneric, toolCallErrorCode, withToolCall } from '../../common/state.js';
 import type { CancelDraftState } from '../state.js';
+
+const TOOL_NAME = 'cancel_appointment';
 
 /**
  * Commit del subgrafo cancel. Llama `guacuco.cancelAppointment` con
@@ -60,22 +62,29 @@ export function makeCancelCommitNode(deps: CancelCommitDeps) {
     }
 
     const apptUuid = current.slots.appointmentUuid.value as string;
+    const input = { appointment_uuid: apptUuid };
 
     let result: CancelAppointmentResult;
     try {
-      result = await guacuco.cancelAppointment(
-        { appointment_uuid: apptUuid },
-        { idempotencyKey: intentUuid },
-      );
+      result = await guacuco.cancelAppointment(input, { idempotencyKey: intentUuid });
     } catch (err) {
-      return handleError(err, logger);
+      const code = toolCallErrorCode(err);
+      return withToolCall(handleError(err, logger), {
+        toolName: TOOL_NAME,
+        input,
+        resultStatus: 'error',
+        ...(code ? { errorCode: code } : {}),
+      });
     }
 
     logger.debug('cancel.commit success', {
       appointmentUuid: result.appointment_uuid,
       status: result.status,
     });
-    return { phase: 'done' };
+    return withToolCall<Partial<CancelDraftState>>(
+      { phase: 'done' },
+      { toolName: TOOL_NAME, input, resultStatus: 'ok' },
+    );
   };
 }
 

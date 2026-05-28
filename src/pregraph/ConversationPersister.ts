@@ -11,12 +11,14 @@ import type {
 import type { ChannelMessage } from '../core/types/ChannelMessage.js';
 import type { Identity } from '../core/types/Identity.js';
 import type { OutboundReply, Outcome } from '../core/types/Outcome.js';
+import type { ToolCallRecord } from '../core/types/ToolCall.js';
 import { persistTurnTotal } from '../infrastructure/observability/metrics.js';
 import { maskPII } from '../security/maskPII.js';
 
 export interface PersistTurnMetadata {
   subgraph?: string;
-  toolCalls?: PersistAgentTurnToolCall[];
+  /** Tools ejecutadas en el turno (shape neutral; se mapea al shape Guacuco). */
+  toolCalls?: ToolCallRecord[];
 }
 
 /**
@@ -122,9 +124,19 @@ function buildAssistantTurn(
   };
   if (metadata?.subgraph) turn.subgraph = metadata.subgraph;
   if (metadata?.toolCalls && metadata.toolCalls.length > 0) {
-    turn.tool_calls = metadata.toolCalls;
+    turn.tool_calls = metadata.toolCalls.map(toGuacucoToolCall);
   }
   return turn;
+}
+
+/** Mapea el `ToolCallRecord` neutral (core) al shape de Guacuco (P2). */
+function toGuacucoToolCall(rec: ToolCallRecord): PersistAgentTurnToolCall {
+  return {
+    tool_name: rec.toolName,
+    input: rec.input,
+    result_status: rec.resultStatus,
+    ...(rec.errorCode ? { error_code: rec.errorCode } : {}),
+  };
 }
 
 /**
