@@ -10,7 +10,7 @@ import type { CatalogState } from '../../../../core/types/Catalog.js';
 import type { CrmContext } from '../../../../core/types/CrmContext.js';
 import type { Identity } from '../../../../core/types/Identity.js';
 import type { Outcome } from '../../../../core/types/Outcome.js';
-import type { AnthropicProvider } from '../../../../infrastructure/llm/AnthropicProvider.js';
+import type { LlmProvider } from '../../../../infrastructure/llm/LlmProvider.js';
 import { buildSqlGenerationPrompt, buildTemporalContext } from '../prompts/querySql.js';
 import { truncateResultsForSynthesis } from '../resultTruncator.js';
 import { resolveAllowedSchema } from '../schemaResolver.js';
@@ -30,7 +30,7 @@ import type { QueryDraftState } from '../state.js';
 
 export interface FetchIntentDeps {
   guacuco: GuacucoClient;
-  llm: AnthropicProvider;
+  llm: LlmProvider;
   logger: Logger;
 }
 
@@ -157,7 +157,7 @@ interface FreeformDeps {
   state: QueryDraftState;
   identity: Identity | null | undefined;
   guacuco: GuacucoClient;
-  llm: AnthropicProvider;
+  llm: LlmProvider;
   logger: Logger;
   schemaCache: Map<string, CachedSchema>;
 }
@@ -328,7 +328,7 @@ async function generateSql(args: {
   identity: Identity;
   allowedSchema: string;
   temporal: ReturnType<typeof buildTemporalContext>;
-  llm: AnthropicProvider;
+  llm: LlmProvider;
   logger: Logger;
   errorContext?: string;
 }): Promise<SqlGenerationResult> {

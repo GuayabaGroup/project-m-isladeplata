@@ -18,7 +18,7 @@
 8. [Estado del grafo (`GraphState`)](#8-estado-del-grafo-graphstate)
 9. [Anti-alucinación: state como única fuente de verdad](#9-anti-alucinación-state-como-única-fuente-de-verdad)
 10. [Supervisor + Subgrafos](#10-supervisor--subgrafos)
-11. [LLM (Anthropic, modelos por nodo)](#11-llm-anthropic-modelos-por-nodo)
+11. [LLM (provider-agnóstico, modelos por nodo)](#11-llm-provider-agnóstico-modelos-por-nodo)
 12. [Canales (WhatsApp dual + agnosticidad)](#12-canales-whatsapp-dual--agnosticidad)
 13. [Seguridad + Errores + Logging](#13-seguridad--errores--logging)
 14. [Testing (Vitest)](#14-testing-vitest)
@@ -40,7 +40,7 @@ src/
 │
 ├── infrastructure/   # Adaptadores externos
 │   ├── http/             # Express app, RetryClient, middleware
-│   ├── llm/              # AnthropicProvider (envoltorio único del SDK)
+│   ├── llm/              # LlmProvider interface + AnthropicProvider/OpenAIProvider + createLlmProvider
 │   ├── checkpointer/     # Postgres checkpointer de LangGraph + TTL/cleanup
 │   ├── redis/            # DedupStore, RateLimitStore (NO sesiones)
 │   └── observability/    # Winston logger + Sentry + swallowAsync
@@ -136,7 +136,7 @@ Isladeplata **no usa DI container**. El wiring vive en `src/main/bootstrap.ts` c
 2. `initSentry`
 3. `connectRedis` (dedup + rate limit únicamente)
 4. `connectPostgresCheckpointer` (LangGraph)
-5. `AnthropicProvider`
+5. `createLlmProvider(env, logger)` (Anthropic/OpenAI según `LLM_PROVIDER`)
 6. HTTP clients (`GuacucoClient`, `ParguitoClient`)
 7. Redis stores (`DedupStore`, `RateLimitStore`)
 8. Compile del grafo (`compileGraph(checkpointer, llmProvider, clients)`) — **una sola vez**, los threads de cliente y staff comparten el grafo compilado.
@@ -423,25 +423,34 @@ Cada subgrafo declara `meta.attempts` en su state. Si supera N (ej. 5), el subgr
 
 ---
 
-## 11. LLM (Anthropic, modelos por nodo)
+## 11. LLM (provider-agnóstico, modelos por nodo)
 
-### 11.1 — `AnthropicProvider` es el único wrapper del SDK
+### 11.1 — `LlmProvider` es el contrato; los SDKs viven detrás de impls
 
-Componentes LLM (supervisor, nodos `ask_slot`, `build_confirm_message`, etc.) reciben `AnthropicProvider` por constructor. **NO** importar `@anthropic-ai/sdk` directo fuera de `infrastructure/llm/`.
+Todo código de negocio (supervisor, nodos `ask_slot`, `build_confirm_message`, etc.) recibe un `LlmProvider` por constructor — **nunca** una clase concreta como `AnthropicProvider`. La selección del provider activo se hace al boot vía `createLlmProvider(env, logger)` y se rige por `env.LLM_PROVIDER` (`'anthropic'` | `'openai'`).
+
+Impls actuales en `src/infrastructure/llm/`:
+
+- `AnthropicProvider` — envuelve `@anthropic-ai/sdk`.
+- `OpenAIProvider` — envuelve `openai`.
+
+Reglas duras:
+
+- **NO** importar `@anthropic-ai/sdk` ni `openai` fuera de su archivo de impl (y los tests específicos de esa impl).
+- El contrato público (`LlmProvider`, `LlmMessage`, `LlmToolSpec`, `LlmToolCall`, `LlmCompleteInput`, `LlmCompleteOutput`) vive en `src/infrastructure/llm/LlmProvider.ts` y **no** filtra tipos de ningún SDK. Si un caller necesita un campo provider-específico, la abstracción está mal y hay que extender el contrato — no escaparse al SDK.
+- Agregar un nuevo provider = nueva clase en `infrastructure/llm/`, una nueva rama en `createLlmProvider`, nuevas env vars en `config/env.ts` + `tests/setup.ts` + `.env.example`. Cero cambios fuera de esos archivos.
 
 ### 11.2 — Modelos por nodo (declarados en `config/llm.config.ts`)
 
-Default: **Claude Haiku 4.5**. Excepciones aprobadas:
+Los configs por rol (`SUPERVISOR_CONFIG`, `RESPONSE_CONFIG`, `SOCIAL_CONFIG`) resuelven `model` en función de `env.LLM_PROVIDER`:
 
-| Env var (default) | Nodo / call site | Razón |
+| Rol | Anthropic (default) | OpenAI (default) |
 |---|---|---|
-| `SUPERVISOR_MODEL` (Haiku) | clasificador de intent | Latencia + costo, ruteo no-crítico |
-| `SUBGRAPH_REASONING_MODEL` (Sonnet) | nodos de razonamiento profundo dentro de subgrafos críticos (ej. parsing de slot complejo) | Reduce alucinaciones y retries |
-| `QUERY_SQL_MODEL` (Sonnet) | generación de SQL en subgrafo de query | Heredado de IDP v2 §9.1, evita columnas inventadas |
-| `RESPONSE_MODEL` (Haiku) | formulación de texto al usuario (ask_slot, confirm_message, social) | Latencia |
-| `QUALITY_GATE_MODEL` (Haiku) | post-validación opcional de respuestas | Costo |
+| Supervisor / clasificación | `SUPERVISOR_MODEL` (Haiku 4.5) | `OPENAI_SUPERVISOR_MODEL` (gpt-4o-mini) |
+| Respuestas conversacionales | `RESPONSE_MODEL` (Haiku 4.5) | `OPENAI_RESPONSE_MODEL` (gpt-4o-mini) |
+| Social fast-path | `RESPONSE_MODEL` (Haiku 4.5) | `OPENAI_RESPONSE_MODEL` (gpt-4o-mini) |
 
-NUNCA hardcodear modelo, temperature, maxTokens, prompts. Todo por env + `llm.config.ts`.
+NUNCA hardcodear modelo, temperature, maxTokens, prompts. Todo por env + `llm.config.ts`. Si necesitás un modelo distinto para un rol específico (ej. razonamiento profundo en un subgrafo crítico), agregá un nuevo `*_CONFIG` con su par de env vars (`<ROL>_MODEL` para Anthropic, `OPENAI_<ROL>_MODEL` para OpenAI).
 
 ### 11.3 — Resilience ante fallos del LLM
 
@@ -694,7 +703,8 @@ Modificación requiere: leer archivo completo → presentar propuesta → espera
 ### NUNCA
 
 - Importar `pg`, `kysely`, `prisma` o driver SQL del negocio (excepción: `infrastructure/checkpointer/` para el Postgres del agente)
-- Importar `@anthropic-ai/sdk` directo (usar `AnthropicProvider`)
+- Importar `@anthropic-ai/sdk` o `openai` directo fuera de su archivo de impl en `infrastructure/llm/` (los callers usan `LlmProvider`)
+- Tipar un nodo o supervisor como `AnthropicProvider`/`OpenAIProvider` — usar `LlmProvider`
 - Importar `@langchain/langgraph` desde `core/`, `clients/`, `channels/`, `nlg/`
 - Usar `axios` directo (usar `RetryClient` o subclase de `BaseHttpClient`)
 - Usar `any` en TypeScript
@@ -705,7 +715,7 @@ Modificación requiere: leer archivo completo → presentar propuesta → espera
 - Eliminar la validación de slots resolved en `commit_*` "porque ya viene del state"
 - Almacenar keys en Redis sin TTL
 - Hardcodear secretos, modelos LLM, timeouts, maxTokens, temperatures, prompts, límites de canal
-- Usar Sonnet/Opus fuera de los call sites declarados en §11.2
+- Cambiar el provider activo en producción sin probarlo primero con `LLM_PROVIDER=<otro>` en dev/staging
 - Comparar HMAC/signatures con `===`
 - Logear API keys, tokens, JWTs, bodies crudos de webhook, `messages[]` completo, texto sin truncar
 - Aplicar `express.json()` globalmente (rompe HMAC del webhook WA — body parser por ruta)

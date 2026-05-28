@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Logger } from 'winston';
 import { SUPERVISOR_CONFIG } from '../../../../config/llm.config.js';
 import type { CatalogState } from '../../../../core/types/Catalog.js';
-import type { AnthropicProvider } from '../../../../infrastructure/llm/AnthropicProvider.js';
+import type { LlmProvider } from '../../../../infrastructure/llm/LlmProvider.js';
 import type { AppointmentDraftState } from '../state.js';
 
 /**
@@ -22,7 +22,7 @@ import type { AppointmentDraftState } from '../state.js';
  */
 
 export interface BuildConfirmMessageDeps {
-  llm: AnthropicProvider;
+  llm: LlmProvider;
   logger: Logger;
 }
 

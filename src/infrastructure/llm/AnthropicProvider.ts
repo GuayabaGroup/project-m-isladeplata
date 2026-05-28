@@ -1,48 +1,16 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { Logger } from 'winston';
+import type {
+  LlmCompleteInput,
+  LlmCompleteOutput,
+  LlmProvider,
+  LlmToolCall,
+} from './LlmProvider.js';
 
 /**
- * Único wrapper del SDK Anthropic en el repo (§9.2 REGLAS_ISLADEPLATA).
- * Cualquier nodo LLM debe inyectar este provider — NO importar el SDK
- * directamente fuera de este archivo.
+ * Implementación `LlmProvider` para el SDK Anthropic (§11.1 REGLAS).
+ * Único punto del repo que importa `@anthropic-ai/sdk` además de tests.
  */
-
-export interface LlmMessage {
-  role: 'user' | 'assistant';
-  content: string;
-}
-
-/**
- * Tool spec con JSON Schema. Tipado laxo a propósito para no acoplar a la
- * versión del SDK Anthropic.
- */
-export interface AnthropicToolSpec {
-  name: string;
-  description?: string;
-  input_schema: Record<string, unknown>;
-}
-
-export interface LlmToolCall {
-  id: string;
-  name: string;
-  input: Record<string, unknown>;
-}
-
-export interface LlmCompleteInput {
-  model: string;
-  system: string;
-  messages: LlmMessage[];
-  tools?: AnthropicToolSpec[];
-  temperature: number;
-  maxTokens: number;
-}
-
-export interface LlmCompleteOutput {
-  text: string;
-  toolCalls: LlmToolCall[];
-  stopReason: string;
-  usage: { inputTokens: number; outputTokens: number };
-}
 
 /**
  * Mínima superficie del SDK que consumimos. Inyectable en tests sin tocar la
@@ -61,7 +29,7 @@ export interface AnthropicProviderDeps {
   client?: AnthropicMessagesLike;
 }
 
-export class AnthropicProvider {
+export class AnthropicProvider implements LlmProvider {
   private readonly logger: Logger;
   private readonly messages: AnthropicMessagesLike;
 
@@ -75,13 +43,6 @@ export class AnthropicProvider {
     }
   }
 
-  /**
-   * Llamada bloqueante al SDK. NUNCA lanza (§9.4 — defaults seguros) — ante
-   * fallo, retorna shape vacío + log warn. El caller decide qué hacer con un
-   * `text=''` (típicamente: fail-open a un default seguro).
-   *
-   * Sin streaming en H3.B: cada call es non-streaming `messages.create`.
-   */
   async complete(input: LlmCompleteInput): Promise<LlmCompleteOutput> {
     const params: Anthropic.Messages.MessageCreateParamsNonStreaming = {
       model: input.model,
@@ -92,7 +53,7 @@ export class AnthropicProvider {
     };
     if (input.tools && input.tools.length > 0) {
       // El SDK exige `input_schema.type === 'object'` en su tipo; mantenemos
-      // nuestro tipo `AnthropicToolSpec` laxo y validamos en el caller.
+      // nuestro `LlmToolSpec` laxo y validamos en el caller.
       params.tools = input.tools as unknown as Anthropic.Messages.Tool[];
     }
 
@@ -123,7 +84,7 @@ function parseMessage(response: Anthropic.Messages.Message): LlmCompleteOutput {
         input: (block.input as Record<string, unknown>) ?? {},
       });
     }
-    // Ignoramos otros tipos (thinking, server_tool_use, etc.) — no aplican en H3.B.
+    // Ignoramos otros tipos (thinking, server_tool_use, etc.).
   }
 
   return {

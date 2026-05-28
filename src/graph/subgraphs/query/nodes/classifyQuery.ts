@@ -2,7 +2,7 @@ import type { Logger } from 'winston';
 import { SUPERVISOR_CONFIG } from '../../../../config/llm.config.js';
 import { parseLlmJson } from '../../../../core/parseLlmJson.js';
 import type { Identity } from '../../../../core/types/Identity.js';
-import type { AnthropicProvider } from '../../../../infrastructure/llm/AnthropicProvider.js';
+import type { LlmProvider } from '../../../../infrastructure/llm/LlmProvider.js';
 import type { QueryDraftState, QueryIntent } from '../state.js';
 
 /**
@@ -16,7 +16,7 @@ import type { QueryDraftState, QueryIntent } from '../state.js';
  */
 
 export interface ClassifyQueryDeps {
-  llm: AnthropicProvider;
+  llm: LlmProvider;
   logger: Logger;
 }
 

@@ -10,7 +10,7 @@ import type { Logger } from 'winston';
 import type { GuacucoClient } from '../clients/GuacucoClient.js';
 import { IdpError } from '../core/errors/IdpError.js';
 import type { Outcome } from '../core/types/Outcome.js';
-import type { AnthropicProvider } from '../infrastructure/llm/AnthropicProvider.js';
+import type { LlmProvider } from '../infrastructure/llm/LlmProvider.js';
 import { sanitizeUserInput } from '../security/sanitize.js';
 import { type GraphState, GraphStateAnnotation, type GraphStateUpdate } from './state.js';
 // Cancel subgraph (H5)
@@ -84,7 +84,7 @@ export interface CompiledGraph {
 export interface CompileGraphDeps {
   checkpointer: BaseCheckpointSaver;
   logger: Logger;
-  llm: AnthropicProvider;
+  llm: LlmProvider;
   guacuco: GuacucoClient;
 }
 

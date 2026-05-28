@@ -63,18 +63,36 @@ const envSchema = z.object({
   /** Frecuencia del job que borra checkpoints viejos para no inflar la tabla. */
   CHECKPOINTER_CLEANUP_INTERVAL_SECONDS: z.coerce.number().int().positive().default(3_600),
 
-  // Anthropic — LLMs del supervisor + tools. Único wrapper en
-  // `src/infrastructure/llm/AnthropicProvider.ts` (§9.2 REGLAS).
+  // LLM — provider switch + creds + modelos por rol (§11 REGLAS).
+  // `LLM_PROVIDER` selecciona la impl en runtime (`createLlmProvider`).
+  // Keys/modelos del provider elegido deben estar seteados; los del otro
+  // pueden quedar vacíos. Validación cruzada vive en `createLlmProvider`
+  // (fail-fast con mensaje claro al boot si falta lo del provider activo).
+  LLM_PROVIDER: z.enum(['anthropic', 'openai']).default('anthropic'),
+
+  // Anthropic
   ANTHROPIC_API_KEY: z
     .string()
-    .min(1)
-    .refine((v) => v.startsWith('sk-ant-') || v.startsWith('test-'), {
-      message: 'ANTHROPIC_API_KEY must start with "sk-ant-" (or "test-" in test env)',
+    .default('')
+    .refine((v) => v === '' || v.startsWith('sk-ant-') || v.startsWith('test-'), {
+      message: 'ANTHROPIC_API_KEY must be empty or start with "sk-ant-" (or "test-" in test env)',
     }),
-  /** Clasificador de intent + fast-path social. Default Haiku 4.5. */
+  /** Anthropic: clasificador de intent + fast-path social. Default Haiku 4.5. */
   SUPERVISOR_MODEL: z.string().default('claude-haiku-4-5-20251001'),
-  /** Generación de respuestas conversacionales (social + tools). Default Haiku 4.5. */
+  /** Anthropic: generación de respuestas conversacionales. Default Haiku 4.5. */
   RESPONSE_MODEL: z.string().default('claude-haiku-4-5-20251001'),
+
+  // OpenAI
+  OPENAI_API_KEY: z
+    .string()
+    .default('')
+    .refine((v) => v === '' || v.startsWith('sk-') || v.startsWith('test-'), {
+      message: 'OPENAI_API_KEY must be empty or start with "sk-" (or "test-" in test env)',
+    }),
+  /** OpenAI: clasificador de intent + fast-path social. Default gpt-4o-mini. */
+  OPENAI_SUPERVISOR_MODEL: z.string().default('gpt-4o-mini'),
+  /** OpenAI: generación de respuestas conversacionales. Default gpt-4o-mini. */
+  OPENAI_RESPONSE_MODEL: z.string().default('gpt-4o-mini'),
 
   /**
    * Auth para el endpoint `/metrics` (H8.2). Si vacío, el endpoint NO se

@@ -33,7 +33,7 @@ pnpm lint:fix          # biome check --write
 - **Imports `.js` aunque el source sea `.ts`** (NodeNext + ESM puro).
 - **Zero `any`**. Strict TypeScript. `import type` para tipos (enforzado por `verbatimModuleSyntax`).
 - **No `pg`/`prisma`/`kysely`** desde código de negocio. Toda data va por Guacuco/Parguito vía HTTP. La única excepción es `src/infrastructure/checkpointer/` (Postgres del agente, NO del negocio).
-- **No `axios` directo, no `@anthropic-ai/sdk` directo** — usar `RetryClient`/`BaseHttpClient` y `AnthropicProvider` (cuando se agreguen).
+- **No `axios` directo, no SDK LLM directo** — usar `RetryClient`/`BaseHttpClient` y el contrato `LlmProvider` (impls Anthropic/OpenAI seleccionadas vía `createLlmProvider`). Ver §11 REGLAS.
 - **No `@langchain/langgraph` fuera de `graph/` + `pregraph/` + `infrastructure/checkpointer/`**.
 - **Observability dual**: Sentry para errores no esperados, **LangSmith para tracing del grafo + LLM** (init opt-in vía `LANGSMITH_TRACING`). En producción: `LANGSMITH_HIDE_INPUTS=true` + project separado por entorno. Ver §13.6 REGLAS.
 - **Tests fuera del source** (`tests/unit/`, `tests/integration/`). Vitest, no Jest. Imports explícitos desde `vitest`.

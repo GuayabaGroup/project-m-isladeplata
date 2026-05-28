@@ -1,7 +1,7 @@
 import type { Logger } from 'winston';
 import { SUPERVISOR_CONFIG } from '../../config/llm.config.js';
 import { parseLlmJson } from '../../core/parseLlmJson.js';
-import type { AnthropicProvider } from '../../infrastructure/llm/AnthropicProvider.js';
+import type { LlmProvider } from '../../infrastructure/llm/LlmProvider.js';
 import { sanitizeUserInput } from '../../security/sanitize.js';
 import type { GraphState, GraphStateUpdate, Intent, MessageType } from '../state.js';
 
@@ -13,7 +13,7 @@ import type { GraphState, GraphStateUpdate, Intent, MessageType } from '../state
  */
 
 export interface ClassifyDeps {
-  llm: AnthropicProvider;
+  llm: LlmProvider;
   logger: Logger;
 }
 

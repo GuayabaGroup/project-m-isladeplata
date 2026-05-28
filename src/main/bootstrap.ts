@@ -15,7 +15,7 @@ import { RetryClient } from '../infrastructure/http/RetryClient.js';
 import { createMetricsHandler } from '../infrastructure/http/metricsHandler.js';
 import { errorHandler } from '../infrastructure/http/middleware/errorHandler.js';
 import { registerRoutes } from '../infrastructure/http/registerRoutes.js';
-import { AnthropicProvider } from '../infrastructure/llm/AnthropicProvider.js';
+import { createLlmProvider } from '../infrastructure/llm/createLlmProvider.js';
 import { logger } from '../infrastructure/observability/logger.js';
 import { metricsRegistry } from '../infrastructure/observability/metrics.js';
 import { closeSentry, initSentry } from '../infrastructure/observability/sentry.js';
@@ -101,7 +101,7 @@ export async function bootstrap(): Promise<BootstrappedApp> {
   const responseBuilder = new ResponseBuilder(logger);
   const dispatcher = new ResponseDispatcher(responseBuilder, whatsappSender, logger);
 
-  const llm = new AnthropicProvider({ apiKey: env.ANTHROPIC_API_KEY, logger });
+  const llm = createLlmProvider(env, logger);
 
   const threadResolver = new ThreadResolver(checkpointer, logger);
   const graph = compileGraph({ checkpointer: checkpointer.saver, logger, llm, guacuco });

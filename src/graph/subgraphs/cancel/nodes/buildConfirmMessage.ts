@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Logger } from 'winston';
 import { SUPERVISOR_CONFIG } from '../../../../config/llm.config.js';
-import type { AnthropicProvider } from '../../../../infrastructure/llm/AnthropicProvider.js';
+import type { LlmProvider } from '../../../../infrastructure/llm/LlmProvider.js';
 import type { CancelDraftState } from '../state.js';
 
 /**
@@ -13,7 +13,7 @@ import type { CancelDraftState } from '../state.js';
  */
 
 export interface CancelBuildConfirmDeps {
-  llm: AnthropicProvider;
+  llm: LlmProvider;
   logger: Logger;
 }
 

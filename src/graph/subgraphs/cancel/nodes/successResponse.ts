@@ -1,7 +1,7 @@
 import type { Logger } from 'winston';
 import { RESPONSE_CONFIG } from '../../../../config/llm.config.js';
 import type { Outcome } from '../../../../core/types/Outcome.js';
-import type { AnthropicProvider } from '../../../../infrastructure/llm/AnthropicProvider.js';
+import type { LlmProvider } from '../../../../infrastructure/llm/LlmProvider.js';
 import type { CancelDraftState } from '../state.js';
 
 /**
@@ -10,7 +10,7 @@ import type { CancelDraftState } from '../state.js';
  */
 
 export interface CancelSuccessDeps {
-  llm: AnthropicProvider;
+  llm: LlmProvider;
   logger: Logger;
 }
 

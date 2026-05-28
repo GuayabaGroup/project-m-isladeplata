@@ -1,10 +1,10 @@
 import type { BaseMessage } from '@langchain/core/messages';
-import type { LlmMessage } from './AnthropicProvider.js';
+import type { LlmMessage } from './LlmProvider.js';
 
 /**
- * Convierte `state.messages` (BaseMessage[] de LangChain) al shape de
- * `messages` que espera el SDK Anthropic. Appendea el turno actual del usuario
- * como último mensaje.
+ * Convierte `state.messages` (BaseMessage[] de LangChain) al shape neutral
+ * `LlmMessage[]` que consume cualquier `LlmProvider`. Appendea el turno
+ * actual del usuario como último mensaje.
  *
  * Reglas:
  * - Filtra mensajes de tipo `system`/`tool`/`function` — el system prompt va

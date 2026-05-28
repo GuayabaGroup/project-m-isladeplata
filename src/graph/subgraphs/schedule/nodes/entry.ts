@@ -3,7 +3,7 @@ import { SUPERVISOR_CONFIG } from '../../../../config/llm.config.js';
 import { parseLlmJson } from '../../../../core/parseLlmJson.js';
 import type { ChannelMessage } from '../../../../core/types/ChannelMessage.js';
 import type { Identity } from '../../../../core/types/Identity.js';
-import type { AnthropicProvider } from '../../../../infrastructure/llm/AnthropicProvider.js';
+import type { LlmProvider } from '../../../../infrastructure/llm/LlmProvider.js';
 import { sanitizeUserInput } from '../../../../security/sanitize.js';
 import { parseUserSlotReply } from '../../../nodes/parseUserSlotReply.js';
 import type { AppointmentDraftSlots, AppointmentDraftState, SlotState } from '../state.js';
@@ -25,7 +25,7 @@ import type { AppointmentDraftSlots, AppointmentDraftState, SlotState } from '..
  */
 
 export interface EntryDeps {
-  llm: AnthropicProvider;
+  llm: LlmProvider;
   logger: Logger;
 }
 

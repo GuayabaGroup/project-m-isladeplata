@@ -45,11 +45,17 @@ process.env.CHECKPOINTER_TTL_SECONDS = process.env.CHECKPOINTER_TTL_SECONDS ?? '
 process.env.CHECKPOINTER_CLEANUP_INTERVAL_SECONDS =
   process.env.CHECKPOINTER_CLEANUP_INTERVAL_SECONDS ?? '3600';
 
-// Anthropic (H3.B) — los tests mockean el SDK; no hace falta key real.
-// El prefijo `test-` está permitido por el refine en env.ts.
+// LLM (H3.B) — los tests mockean los SDKs; no hace falta key real. El prefijo
+// `test-` está permitido por los refines en env.ts para ambos providers.
+// Default LLM_PROVIDER=anthropic — tests específicos de OpenAI setean
+// `process.env.LLM_PROVIDER='openai'` antes de importar el factory.
+process.env.LLM_PROVIDER = process.env.LLM_PROVIDER ?? 'anthropic';
 process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY ?? 'test-anthropic-key';
 process.env.SUPERVISOR_MODEL = process.env.SUPERVISOR_MODEL ?? 'claude-haiku-4-5-20251001';
 process.env.RESPONSE_MODEL = process.env.RESPONSE_MODEL ?? 'claude-haiku-4-5-20251001';
+process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? 'test-openai-key';
+process.env.OPENAI_SUPERVISOR_MODEL = process.env.OPENAI_SUPERVISOR_MODEL ?? 'gpt-4o-mini';
+process.env.OPENAI_RESPONSE_MODEL = process.env.OPENAI_RESPONSE_MODEL ?? 'gpt-4o-mini';
 
 // Metrics (H8.2) — vacío en tests para no exponer endpoint por default.
 // Tests específicos del endpoint setean el valor antes de instanciar el handler.
