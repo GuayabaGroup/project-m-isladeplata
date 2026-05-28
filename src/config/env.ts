@@ -30,10 +30,14 @@ export const envSchema = z
     GUACUCO_API_KEY: z.string().min(1),
     GUACUCO_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
 
-    // Parguito — CRM (stub Etapa 3; cuando explota, ParguitoClient retorna defaults)
+    // Parguito — CRM. Mientras esté en stub (`PARGUITO_ENABLED=false`), el
+    // pre-grafo NO consulta el endpoint y pasa `EMPTY_CRM_CONTEXT` al grafo.
+    // Cuando se habilite (`true`), `ParguitoClient` es estricto: cualquier fallo
+    // propaga al pipeline (Sentry + outcome `error`).
     PARGUITO_URL: z.string().url(),
     PARGUITO_API_KEY: z.string().min(1),
     PARGUITO_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
+    PARGUITO_ENABLED: boolFromString,
 
     // HTTP server
     PORT: z.coerce.number().int().positive().default(4000),

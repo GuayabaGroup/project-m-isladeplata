@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Logger } from 'winston';
 import { ParguitoClient } from '../../../src/clients/ParguitoClient.js';
 import type { Envelope } from '../../../src/clients/types/Envelope.js';
-import { EMPTY_CRM_CONTEXT } from '../../../src/core/types/CrmContext.js';
+import { ToolExecutionError } from '../../../src/core/errors/ToolExecutionError.js';
 import type { CrmContext } from '../../../src/core/types/CrmContext.js';
 import type { RetryClient } from '../../../src/infrastructure/http/RetryClient.js';
 
@@ -57,40 +57,37 @@ describe('ParguitoClient.getCrmContext', () => {
     expect(mockHttp.get).toHaveBeenCalledWith('/api/v1/crm/context/prof-1');
   });
 
-  it('falls back to EMPTY_CRM_CONTEXT when backend returns success=false', async () => {
+  it('throws ToolExecutionError when backend returns success=false', async () => {
     const mockHttp = makeMockHttp();
     mockHttp.get.mockResolvedValue(
       makeResponse({ success: false, error: { code: 'PROFILE_NOT_FOUND', message: 'nope' } }),
     );
 
     const client = new ParguitoClient(mockHttp as unknown as RetryClient, mockLogger);
-    const result = await client.getCrmContext('prof-1');
 
-    expect(result).toEqual(EMPTY_CRM_CONTEXT);
-    expect(mockLogger.warn).toHaveBeenCalledWith(
-      'Parguito.getCrmContext fell back to defaults',
-      expect.objectContaining({ profileUuid: 'prof-1' }),
-    );
+    await expect(client.getCrmContext('prof-1')).rejects.toBeInstanceOf(ToolExecutionError);
+    await expect(client.getCrmContext('prof-1')).rejects.toMatchObject({
+      code: 'PROFILE_NOT_FOUND',
+    });
   });
 
-  it('falls back to defaults when http throws (network error)', async () => {
+  it('propagates http errors (network failure)', async () => {
     const mockHttp = makeMockHttp();
     mockHttp.get.mockRejectedValue(new Error('ECONNREFUSED'));
 
     const client = new ParguitoClient(mockHttp as unknown as RetryClient, mockLogger);
-    const result = await client.getCrmContext('prof-1');
 
-    expect(result).toEqual(EMPTY_CRM_CONTEXT);
-    expect(mockLogger.warn).toHaveBeenCalled();
+    await expect(client.getCrmContext('prof-1')).rejects.toThrow('ECONNREFUSED');
   });
 
-  it('falls back to defaults on invalid envelope', async () => {
+  it('throws parguito_invalid_envelope on malformed response', async () => {
     const mockHttp = makeMockHttp();
     mockHttp.get.mockResolvedValue(makeResponse({ foo: 'bar' } as unknown as Envelope<CrmContext>));
 
     const client = new ParguitoClient(mockHttp as unknown as RetryClient, mockLogger);
-    const result = await client.getCrmContext('prof-1');
 
-    expect(result).toEqual(EMPTY_CRM_CONTEXT);
+    await expect(client.getCrmContext('prof-1')).rejects.toMatchObject({
+      code: 'parguito_invalid_envelope',
+    });
   });
 });

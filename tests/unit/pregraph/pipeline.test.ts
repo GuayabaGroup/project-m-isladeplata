@@ -206,10 +206,14 @@ describe('Pipeline.process', () => {
 
     const outcome = await pipeline.process(makeMessage({ contentText: 'hola mundo' }));
     expect(outcome.action).toBe('response');
-    expect(mocks.parguito.getCrmContext).toHaveBeenCalledWith('cli-1');
+    // PARGUITO_ENABLED default false → pipeline skips el roundtrip y pasa
+    // EMPTY_CRM_CONTEXT directo. El call solo ocurre con flag=true.
+    expect(mocks.parguito.getCrmContext).not.toHaveBeenCalled();
     expect(mocks.threadResolver.resolve).toHaveBeenCalledTimes(1);
     expect(mocks.graph.invoke).toHaveBeenCalledTimes(1);
     expect(mocks.dispatcher.dispatch).toHaveBeenCalledTimes(1);
+    const [initialState] = mocks.graph.invoke.mock.calls[0] ?? [];
+    expect((initialState as { crmContext: unknown }).crmContext).toEqual(EMPTY_CRM_CONTEXT);
   });
 
   it('passes identity + crmContext + channelMessage to graph.invoke', async () => {

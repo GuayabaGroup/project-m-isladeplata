@@ -5,9 +5,11 @@ import type { MessageProcessor } from '../channels/ChannelAdapter.js';
 import type { GuacucoClient } from '../clients/GuacucoClient.js';
 import type { ParguitoClient } from '../clients/ParguitoClient.js';
 import type { HelpersListEntry, ResolveIdentityOutput } from '../clients/types/GuacucoTypes.js';
+import { env } from '../config/env.js';
 import { IdentityNotFoundError } from '../core/errors/IdentityNotFoundError.js';
 import { type CatalogService, type CatalogState, EMPTY_CATALOG } from '../core/types/Catalog.js';
 import type { ChannelMessage } from '../core/types/ChannelMessage.js';
+import { EMPTY_CRM_CONTEXT } from '../core/types/CrmContext.js';
 import type { Identity } from '../core/types/Identity.js';
 import type { Outcome } from '../core/types/Outcome.js';
 import type { CompiledGraph } from '../graph/compile.js';
@@ -47,7 +49,7 @@ export interface PipelineDeps {
  *   2. Identity resolve (Guacuco) — IdentityNotFoundError → silent skip
  *   3. Welcome flow if `isNewUser` (staff auto-onboarded por Guacuco)
  *   4. Rate limit
- *   5. CRM context (Parguito stub, retorna defaults)
+ *   5. CRM context (Parguito gated por env.PARGUITO_ENABLED — defaults si off)
  *   6. Thread management (compute thread_id + TTL inline)
  *   7. Graph invoke con identity + crmContext + channelMessage
  *   8. Dispatch outcome al channel sender
@@ -203,8 +205,13 @@ export class Pipeline implements MessageProcessor {
       return outcome;
     }
 
-    // 6. CRM context (stub Etapa 3 — defaults; en H3.B se augmenta con upcoming de identity)
-    const crmContext = await this.parguito.getCrmContext(profileUuid);
+    // 6. CRM context — gated por env.PARGUITO_ENABLED. Mientras Parguito esté
+    // en stub Etapa 3, el flag queda en `false` y pasamos defaults sin hacer
+    // el roundtrip HTTP. Al habilitarse, `ParguitoClient` es estricto y
+    // cualquier fallo cae al global catch del pipeline.
+    const crmContext = env.PARGUITO_ENABLED
+      ? await this.parguito.getCrmContext(profileUuid)
+      : EMPTY_CRM_CONTEXT;
 
     // 6.1 Catálogo (helpersLists del identity) — usado por H4 schedule subgrafo
     const catalog = buildCatalog(identity.helpersLists);
