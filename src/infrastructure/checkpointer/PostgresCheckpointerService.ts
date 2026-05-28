@@ -62,17 +62,24 @@ export async function createCheckpointerService(logger: Logger): Promise<Checkpo
   const ttlSeconds = env.CHECKPOINTER_TTL_SECONDS;
 
   async function getCheckpointAge(threadId: string): Promise<CheckpointAge> {
-    // LangGraph's PostgresSaver creates a `checkpoints` table with a
-    // `created_at` (or `ts`) column. We query the most-recent row by
-    // thread_id. If shape changes in a future lib version, this query
-    // is the single place to update.
-    const result = await pool.query<{ last_seen: Date | null }>(
-      'SELECT MAX(created_at) AS last_seen FROM checkpoints WHERE thread_id = $1',
+    // LangGraph's PostgresSaver table has no `created_at` column. The
+    // timestamp lives inside the JSONB `checkpoint->>'ts'` (ISO 8601),
+    // and `checkpoint_id` is a UUID v6 (time-ordered), so the most-recent
+    // row is `ORDER BY checkpoint_id DESC LIMIT 1`. If the shape changes
+    // in a future lib version, this query is the single place to update.
+    const result = await pool.query<{ ts: string | null }>(
+      `SELECT checkpoint->>'ts' AS ts
+       FROM checkpoints
+       WHERE thread_id = $1
+       ORDER BY checkpoint_id DESC
+       LIMIT 1`,
       [threadId],
     );
-    const lastSeen = result.rows[0]?.last_seen ?? null;
-    if (!lastSeen) return { exists: false };
-    return { exists: true, ageMs: Date.now() - lastSeen.getTime() };
+    const ts = result.rows[0]?.ts ?? null;
+    if (!ts) return { exists: false };
+    const lastSeenMs = Date.parse(ts);
+    if (Number.isNaN(lastSeenMs)) return { exists: false };
+    return { exists: true, ageMs: Date.now() - lastSeenMs };
   }
 
   async function deleteThread(threadId: string): Promise<void> {
@@ -93,16 +100,36 @@ export async function createCheckpointerService(logger: Logger): Promise<Checkpo
   }
 
   async function cleanup(): Promise<number> {
-    // INTERVAL syntax usa el valor parametrizado para evitar SQL injection.
-    const result = await pool.query(
-      "DELETE FROM checkpoints WHERE created_at < NOW() - ($1 || ' seconds')::interval",
-      [String(ttlSeconds)],
-    );
-    const deleted = result.rowCount ?? 0;
-    if (deleted > 0) {
-      logger.info('Checkpointer cleanup deleted rows', { deleted });
+    // Borra threads cuya última actividad (max `checkpoint->>'ts'`) excede TTL.
+    // Cascada las tres tablas — matching `deleteThread` — para no dejar
+    // huérfanos en `checkpoint_writes`/`checkpoint_blobs`. INTERVAL
+    // parametrizado para evitar SQL injection.
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const expired = await client.query<{ thread_id: string }>(
+        `SELECT thread_id FROM checkpoints
+         GROUP BY thread_id
+         HAVING MAX((checkpoint->>'ts')::timestamptz) < NOW() - ($1 || ' seconds')::interval`,
+        [String(ttlSeconds)],
+      );
+      const threadIds = expired.rows.map((r) => r.thread_id);
+      if (threadIds.length === 0) {
+        await client.query('COMMIT');
+        return 0;
+      }
+      await client.query('DELETE FROM checkpoint_writes WHERE thread_id = ANY($1)', [threadIds]);
+      await client.query('DELETE FROM checkpoint_blobs WHERE thread_id = ANY($1)', [threadIds]);
+      await client.query('DELETE FROM checkpoints WHERE thread_id = ANY($1)', [threadIds]);
+      await client.query('COMMIT');
+      logger.info('Checkpointer cleanup deleted expired threads', { threads: threadIds.length });
+      return threadIds.length;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
     }
-    return deleted;
   }
 
   const cleanupIntervalMs = env.CHECKPOINTER_CLEANUP_INTERVAL_SECONDS * 1000;

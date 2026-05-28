@@ -1,6 +1,9 @@
+import { AxiosError } from 'axios';
 import { IdentityNotFoundError } from '../core/errors/IdentityNotFoundError.js';
+import { IdpError } from '../core/errors/IdpError.js';
 import { ToolExecutionError } from '../core/errors/ToolExecutionError.js';
 import { BaseHttpClient } from './BaseHttpClient.js';
+import { mapRawToResolveIdentityOutput } from './mappers/IdentityMapper.js';
 import type { Envelope } from './types/Envelope.js';
 import type {
   CancelAppointmentParams,
@@ -11,6 +14,7 @@ import type {
   ConfirmAppointmentResult,
   GetStaffAppointmentsSummaryParams,
   GetStaffAppointmentsSummaryResult,
+  IdentityResolveRawResponse,
   PersistAgentTurnsRequest,
   PersistAgentTurnsResponse,
   QueryProcessorExecuteResponse,
@@ -28,7 +32,7 @@ import type {
   ValidateRescheduleSlotResult,
 } from './types/GuacucoTypes.js';
 
-const RESOLVE_IDENTITY_PATH = '/identity/resolve';
+const RESOLVE_IDENTITY_PATH = '/api/v1/identity/resolve';
 const TOOL_EXECUTE_PATH = '/api/v1/tools/execute';
 const QUERY_TABLES_PATH = '/api/v1/query-processor/tables';
 const QUERY_EXECUTE_PATH = '/api/v1/query-processor/query';
@@ -61,26 +65,48 @@ export class GuacucoClient extends BaseHttpClient {
    * Resolve user identity from a channel. Returns the full identity payload
    * (catalog + business + appointments + welcome flow if applies).
    *
-   * Throws `IdentityNotFoundError` when backend returns `USER_NOT_FOUND`
-   * (client phone without business linkage — pre-grafo trata como silent skip).
+   * The real endpoint is `GET /api/v1/identity/resolve` with snake_case query
+   * params (`channel_type`, `channel_id`, `phone_number_id?`, `user_name?`).
+   * The raw response (snake_case top-level) is mapped to the camelCase
+   * `ResolveIdentityOutput` via `IdentityMapper`.
+   *
+   * Throws `IdentityNotFoundError` when backend returns `USER_NOT_FOUND` or
+   * HTTP 404 (client phone without business linkage — pre-grafo lo trata
+   * como silent skip).
    */
   async resolveIdentity(input: ResolveIdentityInput): Promise<ResolveIdentityOutput> {
     try {
-      const response = await this.http.post<Envelope<ResolveIdentityOutput>>(
+      const params: Record<string, string> = {
+        channel_type: input.channelType,
+        channel_id: input.channelId,
+      };
+      if (input.phoneNumberId) params.phone_number_id = input.phoneNumberId;
+      if (input.userName) params.user_name = input.userName;
+
+      const response = await this.http.get<Envelope<IdentityResolveRawResponse>>(
         RESOLVE_IDENTITY_PATH,
-        {
-          channelType: input.channelType,
-          channelId: input.channelId,
-          phoneNumberId: input.phoneNumberId,
-          userName: input.userName,
-        },
+        { params },
       );
-      return this.unwrap<ResolveIdentityOutput>(response);
+      const raw = this.unwrap<IdentityResolveRawResponse>(response);
+      return mapRawToResolveIdentityOutput(raw);
     } catch (err) {
+      if (err instanceof IdentityNotFoundError) throw err;
       if (err instanceof ToolExecutionError && err.code === 'USER_NOT_FOUND') {
         throw new IdentityNotFoundError(err.message, err.details);
       }
-      throw err;
+      if (err instanceof AxiosError && err.response?.status === 404) {
+        throw new IdentityNotFoundError('Identity not found', {
+          channelType: input.channelType,
+          phoneNumberId: input.phoneNumberId,
+        });
+      }
+      if (err instanceof IdpError) throw err;
+      const ax = err as AxiosError;
+      throw new ToolExecutionError(
+        'guacuco_identity_error',
+        ax.message ?? 'Guacuco identity/resolve failed',
+        { status: ax.response?.status },
+      );
     }
   }
 

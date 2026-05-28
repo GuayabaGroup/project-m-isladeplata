@@ -1,5 +1,5 @@
 // ============================================================================
-// Identity resolve — POST /identity/resolve
+// Identity resolve — GET /api/v1/identity/resolve (snake_case query params)
 // ============================================================================
 
 export interface ResolveIdentityInput {
@@ -7,6 +7,40 @@ export interface ResolveIdentityInput {
   channelId: string;
   phoneNumberId?: string;
   userName?: string;
+}
+
+/**
+ * Raw shape returned by Guacuco's `GET /api/v1/identity/resolve` (snake_case
+ * top-level). Confined to GuacucoClient + IdentityMapper; downstream uses
+ * `ResolveIdentityOutput` (camelCase).
+ */
+export interface IdentityResolveRawResponse {
+  user_uuid: string;
+  user_name: string;
+  user_phone: string;
+  user_email?: string | null;
+  user_timezone: string;
+  user_language: string;
+  profile_type: 'staff' | 'client';
+  profile_data: {
+    staff_uuid?: string;
+    client_uuid?: string;
+    appointments?: Array<{ appointment_uuid: string; description: string }>;
+  };
+  preferences: {
+    working_hours: Array<{ day_of_week: string; hours: string }> | null;
+  };
+  business_staff_roles: BusinessStaffRoles | null;
+  helpers_lists: HelpersListEntry[] | null;
+  channel_data: {
+    wa_id?: string;
+    phone_number_id?: string;
+    telegram_id?: string;
+    device_id?: string;
+  } | null;
+  is_new_user: boolean;
+  welcome_message?: string | null;
+  onboarding_url?: string | null;
 }
 
 export interface BusinessService {

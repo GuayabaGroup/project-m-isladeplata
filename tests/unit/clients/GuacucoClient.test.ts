@@ -1,13 +1,13 @@
-import type { AxiosResponse } from 'axios';
+import { AxiosError, type AxiosResponse } from 'axios';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Logger } from 'winston';
 import { GuacucoClient } from '../../../src/clients/GuacucoClient.js';
 import type { Envelope } from '../../../src/clients/types/Envelope.js';
 import type {
   CheckAvailabilityResult,
+  IdentityResolveRawResponse,
   PersistAgentTurnsRequest,
   PersistAgentTurnsResponse,
-  ResolveIdentityOutput,
   ScheduleAppointmentResult,
   ToolExecuteResponse,
   ValidateRescheduleSlotResult,
@@ -45,35 +45,73 @@ afterEach(() => {
 });
 
 describe('GuacucoClient.resolveIdentity', () => {
-  it('returns the identity payload on happy path', async () => {
+  const makeRaw = (
+    overrides: Partial<IdentityResolveRawResponse> = {},
+  ): IdentityResolveRawResponse => ({
+    user_uuid: 'usr-1',
+    user_name: 'Juan',
+    user_phone: '+54911000000',
+    user_timezone: 'America/Argentina/Buenos_Aires',
+    user_language: 'es',
+    profile_type: 'client',
+    profile_data: { client_uuid: 'cli-1' },
+    preferences: { working_hours: null },
+    business_staff_roles: null,
+    helpers_lists: null,
+    channel_data: null,
+    is_new_user: false,
+    ...overrides,
+  });
+
+  it('GET /api/v1/identity/resolve with snake_case query params + maps raw → camelCase', async () => {
     const mockHttp = makeMockHttp();
-    const identity: Partial<ResolveIdentityOutput> = {
-      userUuid: 'usr-1',
-      userName: 'Juan',
-      profileType: 'client',
-      isNewUser: false,
-    };
-    mockHttp.post.mockResolvedValue(makeResponse({ success: true, data: identity }));
+    const raw = makeRaw({
+      is_new_user: true,
+      welcome_message: 'Hola',
+      onboarding_url: 'https://x',
+    });
+    mockHttp.get.mockResolvedValue(makeResponse({ success: true, data: raw }));
 
     const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
     const result = await client.resolveIdentity({
       channelType: 'whatsapp',
       channelId: '54911000000',
       phoneNumberId: 'pn-1',
+      userName: 'Juan',
     });
 
     expect(result.userUuid).toBe('usr-1');
-    expect(mockHttp.post).toHaveBeenCalledWith('/identity/resolve', {
-      channelType: 'whatsapp',
-      channelId: '54911000000',
-      phoneNumberId: 'pn-1',
-      userName: undefined,
+    expect(result.userName).toBe('Juan');
+    expect(result.profileType).toBe('client');
+    expect(result.isNewUser).toBe(true);
+    expect(result.welcomeMessage).toBe('Hola');
+    expect(result.onboardingUrl).toBe('https://x');
+    expect(result.helpersLists).toEqual([]);
+    expect(mockHttp.get).toHaveBeenCalledWith('/api/v1/identity/resolve', {
+      params: {
+        channel_type: 'whatsapp',
+        channel_id: '54911000000',
+        phone_number_id: 'pn-1',
+        user_name: 'Juan',
+      },
     });
   });
 
-  it('translates USER_NOT_FOUND to IdentityNotFoundError', async () => {
+  it('omits phone_number_id + user_name when not provided', async () => {
     const mockHttp = makeMockHttp();
-    mockHttp.post.mockResolvedValue(
+    mockHttp.get.mockResolvedValue(makeResponse({ success: true, data: makeRaw() }));
+
+    const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
+    await client.resolveIdentity({ channelType: 'mobile', channelId: 'profile-uuid' });
+
+    expect(mockHttp.get).toHaveBeenCalledWith('/api/v1/identity/resolve', {
+      params: { channel_type: 'mobile', channel_id: 'profile-uuid' },
+    });
+  });
+
+  it('translates envelope USER_NOT_FOUND to IdentityNotFoundError', async () => {
+    const mockHttp = makeMockHttp();
+    mockHttp.get.mockResolvedValue(
       makeResponse({
         success: false,
         error: { code: 'USER_NOT_FOUND', message: 'silent skip' },
@@ -86,9 +124,21 @@ describe('GuacucoClient.resolveIdentity', () => {
     ).rejects.toBeInstanceOf(IdentityNotFoundError);
   });
 
-  it('propagates other backend errors as ToolExecutionError', async () => {
+  it('translates axios 404 to IdentityNotFoundError', async () => {
     const mockHttp = makeMockHttp();
-    mockHttp.post.mockResolvedValue(
+    const axiosErr = new AxiosError('Request failed with status code 404');
+    axiosErr.response = { status: 404 } as AxiosError['response'];
+    mockHttp.get.mockRejectedValue(axiosErr);
+
+    const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
+    await expect(
+      client.resolveIdentity({ channelType: 'whatsapp', channelId: '54911000000' }),
+    ).rejects.toBeInstanceOf(IdentityNotFoundError);
+  });
+
+  it('propagates other backend envelope errors as ToolExecutionError', async () => {
+    const mockHttp = makeMockHttp();
+    mockHttp.get.mockResolvedValue(
       makeResponse({
         success: false,
         error: { code: 'INVALID_CHANNEL_TYPE', message: 'bad input' },
@@ -99,6 +149,18 @@ describe('GuacucoClient.resolveIdentity', () => {
     await expect(
       client.resolveIdentity({ channelType: 'mars', channelId: 'x' }),
     ).rejects.toBeInstanceOf(ToolExecutionError);
+  });
+
+  it('wraps non-404 axios errors as ToolExecutionError(guacuco_identity_error)', async () => {
+    const mockHttp = makeMockHttp();
+    const axiosErr = new AxiosError('Request failed with status code 500');
+    axiosErr.response = { status: 500 } as AxiosError['response'];
+    mockHttp.get.mockRejectedValue(axiosErr);
+
+    const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
+    await expect(
+      client.resolveIdentity({ channelType: 'whatsapp', channelId: 'x' }),
+    ).rejects.toMatchObject({ code: 'guacuco_identity_error' });
   });
 });
 
