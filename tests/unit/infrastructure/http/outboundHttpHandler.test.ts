@@ -1,8 +1,8 @@
 import type { Request, Response } from 'express';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createOutboundHttpHandler } from '../../../../src/channels/whatsapp/outboundHttpHandler.js';
 import { IdpError } from '../../../../src/core/errors/IdpError.js';
 import type { OutboundSender } from '../../../../src/core/types/OutboundMessage.js';
+import { createOutboundHttpHandler } from '../../../../src/infrastructure/http/outboundHttpHandler.js';
 
 const mockLogger = {
   warn: vi.fn(),
@@ -59,7 +59,7 @@ describe('createOutboundHttpHandler', () => {
     expect(res.json).toHaveBeenCalledWith({ success: true, data: { messageId: 'wamid.9' } });
   });
 
-  it('maps channel_not_configured IdpError to 400', async () => {
+  it('maps a plain IdpError (no upstreamDeliveryFailure) to 400', async () => {
     const sender: OutboundSender = {
       send: vi.fn().mockRejectedValue(new IdpError('channel_not_configured', 'no channel')),
     };
@@ -73,13 +73,18 @@ describe('createOutboundHttpHandler', () => {
     );
   });
 
-  it('maps a send-failure IdpError to 502 preserving error.details (Meta error)', async () => {
+  it('maps an upstreamDeliveryFailure IdpError to 502 preserving error.details', async () => {
     const sender: OutboundSender = {
-      send: vi
-        .fn()
-        .mockRejectedValue(
-          new IdpError('whatsapp_send_failed', 'boom', { meta: { code: 132000 } }),
+      send: vi.fn().mockRejectedValue(
+        new IdpError(
+          'whatsapp_send_failed',
+          'boom',
+          { meta: { code: 132000 } },
+          {
+            upstreamDeliveryFailure: true,
+          },
         ),
+      ),
     };
     const res = makeRes();
     await createOutboundHttpHandler(sender, mockLogger)(makeReq(validBody), res, vi.fn());
@@ -92,6 +97,19 @@ describe('createOutboundHttpHandler', () => {
         }),
       }),
     );
+  });
+
+  it('maps an upstreamDeliveryFailure with a non-whatsapp code to 502 (channel-agnostic)', async () => {
+    const sender: OutboundSender = {
+      send: vi.fn().mockRejectedValue(
+        new IdpError('telegram_send_failed', 'down', undefined, {
+          upstreamDeliveryFailure: true,
+        }),
+      ),
+    };
+    const res = makeRes();
+    await createOutboundHttpHandler(sender, mockLogger)(makeReq(validBody), res, vi.fn());
+    expect(res.status).toHaveBeenCalledWith(502);
   });
 
   it('maps an unexpected (non-IdpError) error to 500', async () => {

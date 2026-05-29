@@ -62,8 +62,7 @@ function makeState(contentText: string): GraphState {
     contentType: 'text',
     contentText,
     receivedAt: new Date().toISOString(),
-    whatsappChannel: 'client',
-    phoneNumberId: 'pn-1',
+    channelMeta: { phoneNumberId: 'pn-1', role: 'client' },
     interactivePayload: null,
   };
   return {

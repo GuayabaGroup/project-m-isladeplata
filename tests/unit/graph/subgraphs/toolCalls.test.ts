@@ -160,8 +160,7 @@ describe('ConversationPersister mapea toolCalls al shape Guacuco', () => {
     messageId: 'm',
     contentText: 'cancelá mi turno',
     receivedAt: '2026-05-28T10:00:00Z',
-    whatsappChannel: 'client',
-    phoneNumberId: 'pn',
+    channelMeta: { phoneNumberId: 'pn', role: 'client' },
     interactivePayload: null,
   } as ChannelMessage;
 

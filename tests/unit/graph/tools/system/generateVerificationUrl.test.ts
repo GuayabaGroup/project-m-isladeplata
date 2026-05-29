@@ -32,8 +32,7 @@ function makeState(profileType: Identity['profileType'] = 'client'): GraphState 
     contentType: 'text',
     contentText: 'verificar',
     receivedAt: new Date().toISOString(),
-    whatsappChannel: profileType === 'staff' ? 'staff' : 'client',
-    phoneNumberId: 'pn-1',
+    channelMeta: { phoneNumberId: 'pn-1', role: profileType === 'staff' ? 'staff' : 'client' },
     interactivePayload: null,
   };
   return {

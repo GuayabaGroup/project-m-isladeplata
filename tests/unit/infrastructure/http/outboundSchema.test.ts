@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { outboundMessageSchema } from '../../../../src/channels/whatsapp/outboundSchema.js';
+import { outboundMessageSchema } from '../../../../src/infrastructure/http/outboundSchema.js';
 
 describe('outboundMessageSchema', () => {
-  it('transforms snake_case text payload to a camelCase DTO', () => {
+  it('transforms snake_case text payload to a camelCase DTO (channelType defaults to whatsapp)', () => {
     const parsed = outboundMessageSchema.parse({
       to: '549111',
       role: 'client',
@@ -12,6 +12,7 @@ describe('outboundMessageSchema', () => {
       idempotency_key: 'k1',
     });
     expect(parsed).toEqual({
+      channelType: 'whatsapp',
       to: '549111',
       role: 'client',
       platformId: 1,
@@ -19,6 +20,30 @@ describe('outboundMessageSchema', () => {
       type: 'text',
       text: { body: 'hola', previewUrl: true },
     });
+  });
+
+  it('honors an explicit channel_type', () => {
+    const parsed = outboundMessageSchema.parse({
+      to: '549111',
+      channel_type: 'telegram',
+      role: 'client',
+      platform_id: 1,
+      type: 'text',
+      text: { body: 'x' },
+    });
+    expect(parsed.channelType).toBe('telegram');
+  });
+
+  it('rejects an unknown channel_type', () => {
+    const result = outboundMessageSchema.safeParse({
+      to: '549111',
+      channel_type: 'carrier_pigeon',
+      role: 'client',
+      platform_id: 1,
+      type: 'text',
+      text: { body: 'x' },
+    });
+    expect(result.success).toBe(false);
   });
 
   it('collapses user_type "owner" to role "staff"', () => {

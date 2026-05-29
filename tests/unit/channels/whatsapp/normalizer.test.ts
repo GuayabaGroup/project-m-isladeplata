@@ -45,8 +45,7 @@ describe('normalizeWhatsAppPayload — text', () => {
       channelId: '54911000000',
       messageId: 'wamid.ABC',
       contentText: 'hola',
-      whatsappChannel: 'client',
-      phoneNumberId: 'pn-123',
+      channelMeta: { phoneNumberId: 'pn-123', role: 'client' },
       userName: 'Juan',
       interactivePayload: null,
     });
@@ -85,7 +84,7 @@ describe('normalizeWhatsAppPayload — interactive', () => {
     expect(result[0]).toMatchObject({
       contentText: 'Confirmar',
       interactivePayload: { type: 'button', id: 'confirm:abc-123', title: 'Confirmar' },
-      whatsappChannel: 'staff',
+      channelMeta: { phoneNumberId: 'pn-123', role: 'staff' },
     });
   });
 

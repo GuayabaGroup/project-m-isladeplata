@@ -47,8 +47,7 @@ function makeMessage(
     contentType: interactivePayload ? 'interactive' : 'text',
     contentText,
     receivedAt: new Date().toISOString(),
-    whatsappChannel: 'client',
-    phoneNumberId: 'pn-1',
+    channelMeta: { phoneNumberId: 'pn-1', role: 'client' },
     interactivePayload,
   };
 }

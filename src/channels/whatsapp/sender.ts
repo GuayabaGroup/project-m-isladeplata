@@ -40,7 +40,14 @@ export class WhatsAppSender {
       });
       const messageId = res.data.messages?.[0]?.id;
       if (!messageId) {
-        throw new IdpError('whatsapp_no_message_id', 'Meta response missing message id');
+        throw new IdpError(
+          'whatsapp_no_message_id',
+          'Meta response missing message id',
+          undefined,
+          {
+            upstreamDeliveryFailure: true,
+          },
+        );
       }
       this.logger.info('WhatsApp message sent', {
         phoneNumberId: input.phoneNumberId,
@@ -73,6 +80,7 @@ export class WhatsAppSender {
         'whatsapp_send_failed',
         err instanceof Error ? err.message : 'WhatsApp send failed',
         meta !== undefined ? { meta } : undefined,
+        { upstreamDeliveryFailure: true },
       );
     }
   }

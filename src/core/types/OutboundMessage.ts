@@ -1,3 +1,4 @@
+import type { ChannelType } from '../enums/ChannelType.js';
 import type { OutboundButton, OutboundCta, OutboundList } from './Outcome.js';
 
 /**
@@ -9,8 +10,14 @@ import type { OutboundButton, OutboundCta, OutboundList } from './Outcome.js';
  * `core/` no depende de nada (§2): reusa los tipos interactivos de `Outcome.ts`.
  */
 
-/** Canal lógico al que se envía. `role` resuelve el `phone_number_id` emisor. */
+/**
+ * Base del contrato S2S agnóstico. `channelType` selecciona el
+ * `OutboundChannelAdapter` emisor; `(role, platformId)` resuelven la credencial
+ * emisora dentro del canal (en WhatsApp: el `phone_number_id`). `role` y
+ * `platformId` son ejes de producto cross-channel (no WhatsApp-only).
+ */
 export interface OutboundMessageBase {
+  channelType: ChannelType;
   to: string;
   role: 'staff' | 'client';
   platformId: number;

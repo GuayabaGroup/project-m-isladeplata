@@ -20,8 +20,7 @@ function inputWith(text: string) {
       contentType: 'text' as const,
       contentText: text,
       receivedAt: '2026-05-28T10:00:00Z',
-      whatsappChannel: 'client' as const,
-      phoneNumberId: 'pn',
+      channelMeta: { phoneNumberId: 'pn', role: 'client' },
       interactivePayload: null,
     },
   };

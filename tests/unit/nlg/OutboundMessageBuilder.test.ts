@@ -23,6 +23,7 @@ function makeBuilder(): OutboundMessageBuilder {
 describe('OutboundMessageBuilder', () => {
   it('builds a text message', () => {
     const dto: OutboundMessageDto = {
+      channelType: 'whatsapp',
       to: '549111',
       role: 'client',
       platformId: 1,
@@ -37,6 +38,7 @@ describe('OutboundMessageBuilder', () => {
 
   it('builds a template with body params and quick-reply buttons (index is string)', () => {
     const dto: OutboundMessageDto = {
+      channelType: 'whatsapp',
       to: '549111',
       role: 'staff',
       platformId: 2,
@@ -65,6 +67,7 @@ describe('OutboundMessageBuilder', () => {
 
   it('omits components when template has no params and no buttons', () => {
     const dto: OutboundMessageDto = {
+      channelType: 'whatsapp',
       to: '549111',
       role: 'staff',
       platformId: 1,
@@ -78,6 +81,7 @@ describe('OutboundMessageBuilder', () => {
   it('does NOT truncate template parameters', () => {
     const longText = 'x'.repeat(5000);
     const dto: OutboundMessageDto = {
+      channelType: 'whatsapp',
       to: '549111',
       role: 'client',
       platformId: 1,
@@ -94,6 +98,7 @@ describe('OutboundMessageBuilder', () => {
 
   it('builds an image media message', () => {
     const dto: OutboundMessageDto = {
+      channelType: 'whatsapp',
       to: '549111',
       role: 'client',
       platformId: 1,

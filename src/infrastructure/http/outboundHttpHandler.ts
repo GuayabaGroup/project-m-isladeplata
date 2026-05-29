@@ -4,18 +4,18 @@ import { IdpError } from '../../core/errors/IdpError.js';
 import type { OutboundSender } from '../../core/types/OutboundMessage.js';
 import { outboundMessageSchema } from './outboundSchema.js';
 
-/** Códigos de `IdpError` que representan un fallo de entrega aguas arriba (→ 502). */
-const SEND_FAILURE_CODES = new Set(['whatsapp_send_failed', 'whatsapp_no_message_id']);
-
 /**
- * Handler HTTP de `POST /api/v1/outbound/messages` (ingress S2S de WhatsApp).
- * Vive en `channels/whatsapp` junto al webhook y al schema — co-locación del
- * boundary del canal (§12). Valida el body y delega en `OutboundSender`
- * (interfaz de `core/`, inyectada por `main/`).
+ * Handler HTTP de `POST /api/v1/outbound/messages` (ingress S2S agnóstico de
+ * canal). Vive en `infrastructure/http/` junto al resto del plumbing HTTP: solo
+ * depende de `core/` (`OutboundSender`, `IdpError`) + el schema zod, nunca de un
+ * canal concreto. Valida el body y delega en `OutboundSender` (interfaz de
+ * `core/`, inyectada por `main/`).
  *
  * Emite el envelope estándar de Guacuco `{ success, data }` / `{ success,
- * error }` (paridad §9.1). El detalle de Meta llega vía `IdpError.details`
- * (el `WhatsAppSender` ya tradujo el error de axios) — NO se importa axios acá.
+ * error }` (paridad §9.1). Mapea a 502 los fallos de entrega aguas arriba vía
+ * `IdpError.upstreamDeliveryFailure` (channel-agnóstico — §13.2 REGLAS); el
+ * resto de los `IdpError` van a 400. El detalle del proveedor llega vía
+ * `IdpError.details` (el sender ya tradujo el error).
  */
 export function createOutboundHttpHandler(sender: OutboundSender, logger: Logger): RequestHandler {
   return async (req, res) => {
@@ -37,7 +37,7 @@ export function createOutboundHttpHandler(sender: OutboundSender, logger: Logger
       res.status(200).json({ success: true, data: { messageId } });
     } catch (err) {
       if (err instanceof IdpError) {
-        const status = SEND_FAILURE_CODES.has(err.code) ? 502 : 400;
+        const status = err.upstreamDeliveryFailure ? 502 : 400;
         logger.warn('Outbound send rejected', { code: err.code, details: err.details });
         res.status(status).json({
           success: false,

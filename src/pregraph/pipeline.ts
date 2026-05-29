@@ -148,7 +148,9 @@ export class Pipeline implements MessageProcessor {
       identity = await this.guacuco.resolveIdentity({
         channelType: message.channelType,
         channelId: message.channelId,
-        phoneNumberId: message.phoneNumberId,
+        // Hint de credencial opaco: el pre-grafo NO interpreta el valor, solo lo
+        // reenvía. El contrato de Guacuco lo nombra `phone_number_id`.
+        phoneNumberId: message.channelMeta?.phoneNumberId,
         userName: message.userName,
       });
     } catch (err) {

@@ -39,8 +39,7 @@ function makeMessage(overrides?: Partial<ChannelMessage>): ChannelMessage {
     contentType: 'text',
     contentText: 'hola',
     receivedAt: new Date().toISOString(),
-    whatsappChannel: 'client',
-    phoneNumberId: 'pn-1',
+    channelMeta: { phoneNumberId: 'pn-1', role: 'client' },
     interactivePayload: null,
     ...overrides,
   };

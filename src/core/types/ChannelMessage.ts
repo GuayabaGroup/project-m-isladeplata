@@ -36,6 +36,16 @@ export interface TemplateButtonPayload {
   payload?: string;
 }
 
+/**
+ * Routing/credentials meta OPACO del canal de origen. Cada canal define qué
+ * claves usa; el pre-grafo NO las interpreta — solo las transporta (p.ej. al
+ * identity resolve) y el `OutboundChannelAdapter` del canal las lee para el
+ * camino reactivo. WhatsApp usa `phoneNumberId` (selección del token emisor) y
+ * `role` (`'staff' | 'client'`). Mantener `core/` agnóstico: NO tipar claves
+ * por canal acá.
+ */
+export type ChannelMeta = Readonly<Record<string, string>>;
+
 export interface ChannelMessage {
   channelType: ChannelType;
   channelId: string;
@@ -45,8 +55,8 @@ export interface ChannelMessage {
   /** Texto humano canónico para TODO tipo (caption para media, name/address para location). */
   contentText: string;
   receivedAt: string;
-  whatsappChannel?: 'staff' | 'client';
-  phoneNumberId?: string;
+  /** Meta de routing específico del canal (opaco para el pre-grafo). Ver `ChannelMeta`. */
+  channelMeta?: ChannelMeta;
   interactivePayload?: InteractivePayload | null;
   /**
    * Set para `template_button`. Solapa a propósito con `interactivePayload`

@@ -59,8 +59,9 @@ function mapMessage(
     receivedAt: msg.timestamp
       ? new Date(Number(msg.timestamp) * 1000).toISOString()
       : new Date().toISOString(),
-    whatsappChannel,
-    phoneNumberId,
+    // Routing meta opaco para el pre-grafo: `phoneNumberId` selecciona el token
+    // emisor; `role` (staff|client) viene del config map. Claves WhatsApp-only.
+    channelMeta: { phoneNumberId, role: whatsappChannel },
     userName,
   };
 

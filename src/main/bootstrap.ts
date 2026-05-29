@@ -2,11 +2,12 @@ import cors from 'cors';
 import express, { type Express } from 'express';
 import helmet from 'helmet';
 import { createWhatsAppInboundAdapter } from '../channels/whatsapp/WhatsAppInboundAdapter.js';
-import { createOutboundHttpHandler } from '../channels/whatsapp/outboundHttpHandler.js';
+import { createWhatsAppOutboundAdapter } from '../channels/whatsapp/WhatsAppOutboundAdapter.js';
 import { WhatsAppSender } from '../channels/whatsapp/sender.js';
 import { GuacucoClient } from '../clients/GuacucoClient.js';
 import { ParguitoClient } from '../clients/ParguitoClient.js';
 import { env } from '../config/env.js';
+import type { OutboundChannelRegistry } from '../core/types/OutboundChannel.js';
 import { compileGraph } from '../graph/compile.js';
 import {
   type CheckpointerService,
@@ -15,6 +16,7 @@ import {
 import { RetryClient } from '../infrastructure/http/RetryClient.js';
 import { createMetricsHandler } from '../infrastructure/http/metricsHandler.js';
 import { errorHandler } from '../infrastructure/http/middleware/errorHandler.js';
+import { createOutboundHttpHandler } from '../infrastructure/http/outboundHttpHandler.js';
 import { registerRoutes } from '../infrastructure/http/registerRoutes.js';
 import { createLlmProvider } from '../infrastructure/llm/createLlmProvider.js';
 import { logger } from '../infrastructure/observability/logger.js';
@@ -102,14 +104,27 @@ export async function bootstrap(): Promise<BootstrappedApp> {
   const whatsappSender = new WhatsAppSender(whatsappHttp, logger);
 
   const responseBuilder = new ResponseBuilder(logger);
-  const dispatcher = new ResponseDispatcher(responseBuilder, whatsappSender, logger);
-
-  // Outbound S2S (Guacuco → IDP → WhatsApp). Reusa el `dedup` ya construido
-  // para idempotencia opcional y el `whatsappSender` por inyección.
   const outboundBuilder = new OutboundMessageBuilder(responseBuilder);
-  const outboundService = new OutboundMessageService({
-    builder: outboundBuilder,
+
+  // Registry de canales de salida (simétrico a `inboundChannels`). El adapter
+  // de WhatsApp encapsula formato + resolución de credencial + sender. Agregar
+  // un canal = nuevo adapter + push a este Map; dispatcher/service no se tocan.
+  const whatsappOutbound = createWhatsAppOutboundAdapter({
+    responseBuilder,
+    outboundBuilder,
     sender: whatsappSender,
+    logger,
+  });
+  const outboundRegistry: OutboundChannelRegistry = new Map([
+    [whatsappOutbound.channelType, whatsappOutbound],
+  ]);
+
+  const dispatcher = new ResponseDispatcher(outboundRegistry, logger);
+
+  // Outbound S2S (Guacuco → IDP → canal). Reusa el `dedup` ya construido para
+  // idempotencia opcional; resuelve el adapter por `channelType` vía el registry.
+  const outboundService = new OutboundMessageService({
+    registry: outboundRegistry,
     dedup,
     logger,
   });

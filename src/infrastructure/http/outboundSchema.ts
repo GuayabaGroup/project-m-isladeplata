@@ -1,13 +1,17 @@
 import { z } from 'zod';
+import { CHANNEL_TYPES } from '../../core/enums/ChannelType.js';
 import type { OutboundMessageDto } from '../../core/types/OutboundMessage.js';
 
 /**
- * Validación del contrato S2S `POST /api/v1/outbound/messages`.
+ * Validación del contrato S2S agnóstico `POST /api/v1/outbound/messages`.
  *
  * Acepta el wire format snake_case que envía Guacuco y lo transforma al
  * `OutboundMessageDto` camelCase de `core/`. El emisor se resuelve por `role`
  * (staff|client); para compat con Guacuco también acepta `user_type`
  * (staff|owner|client) y colapsa `owner → staff` en UN solo lugar (servidor).
+ *
+ * `channel_type` selecciona el canal de salida; es opcional y default
+ * `'whatsapp'` para backward-compat (Guacuco postea sin el campo hoy).
  *
  * Los campos interactivos anidados van en camelCase (contrato nuevo, sin
  * legacy que respetar): `buttonLabel`, `displayText`.
@@ -15,6 +19,7 @@ import type { OutboundMessageDto } from '../../core/types/OutboundMessage.js';
 
 const recipientBase = {
   to: z.string().min(1),
+  channel_type: z.enum(CHANNEL_TYPES).optional(),
   platform_id: z.number().int().positive(),
   role: z.enum(['staff', 'client']).optional(),
   user_type: z.enum(['staff', 'owner', 'client']).optional(),
@@ -120,6 +125,7 @@ export const outboundMessageSchema = rawSchema
     // `resolveRole` ya validado non-null por el superRefine anterior.
     const role = resolveRole(data) as 'staff' | 'client';
     const base = {
+      channelType: data.channel_type ?? 'whatsapp',
       to: data.to,
       role,
       platformId: data.platform_id,

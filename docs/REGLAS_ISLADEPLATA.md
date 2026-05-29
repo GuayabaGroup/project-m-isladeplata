@@ -39,16 +39,16 @@ src/
 ├── config/           # env.ts (Zod fail-fast), channels.config.ts, llm.config.ts
 │
 ├── infrastructure/   # Adaptadores externos
-│   ├── http/             # Express app, RetryClient, middleware
+│   ├── http/             # Express app, RetryClient, middleware, outbound S2S ingress (handler + schema)
 │   ├── llm/              # LlmProvider interface + AnthropicProvider/OpenAIProvider + createLlmProvider
 │   ├── checkpointer/     # Postgres checkpointer de LangGraph + TTL/cleanup
 │   ├── redis/            # DedupStore, RateLimitStore (NO sesiones)
 │   └── observability/    # Winston logger + Sentry + swallowAsync
 │
 ├── channels/         # Canales de entrada/salida
-│   ├── whatsapp/         # webhook + verify + normalizer + sender + types + WhatsAppInboundAdapter
-│   ├── ChannelAdapter.ts # contratos comunes: MessageProcessor + InboundChannelAdapter (registry)
-│   └── (telegram/, mobile/, web/ — se agregan después sin tocar el grafo)
+│   ├── whatsapp/         # webhook + verify + normalizer + sender + types + WhatsAppInboundAdapter + WhatsAppOutboundAdapter
+│   ├── ChannelAdapter.ts # contratos de ENTRADA: MessageProcessor + InboundChannelAdapter (registry; depende de Express)
+│   └── (telegram/, mobile/, web/ — se agregan después sin tocar el grafo ni el dispatch)
 │
 ├── clients/          # HTTP clients hacia backends propios
 │   ├── BaseHttpClient.ts # retry + envelope unwrap + errores tipados
@@ -77,14 +77,14 @@ src/
 │   └── OutboundMessageBuilder.ts # OutboundMessageDto (API) → payload de canal
 │
 ├── outbound/         # Envío proactivo de mensajes (S2S: Guacuco → IDP → canal)
-│   └── OutboundMessageService.ts # orquesta resolución de canal + dedup + sender (recibe sender por inyección)
+│   └── OutboundMessageService.ts # orquesta idempotencia (Redis) + resuelve adapter por channelType (registry)
 │
 ├── security/         # HMAC, sanitización, guardrails
 │
 └── core/             # Tipos puros, enums, errores (NO depende de nada)
     ├── enums/        # ChannelType, InboundContentType, OutcomeAction, ...
-    ├── errors/       # IdpError + subtipos (IdentityNotFound, ToolExecution, RateLimit)
-    └── types/        # ChannelMessage (contentType+media+location+templateButton), Identity, CrmContext, Outcome, OutboundMessage
+    ├── errors/       # IdpError (+ flag upstreamDeliveryFailure) + subtipos (IdentityNotFound, ToolExecution, RateLimit)
+    └── types/        # ChannelMessage (contentType+channelMeta+media+location+templateButton), OutboundChannel (OutboundChannelAdapter + registry), Identity, CrmContext, Outcome, OutboundMessage
 ```
 
 Cada capa tiene un rol claro. **No hay grises**.
@@ -115,9 +115,9 @@ Cada capa tiene un rol claro. **No hay grises**.
 | `infrastructure/` | `core/`, `config/` | `main/`, `pregraph/`, `graph/`, `channels/`, `clients/`, `nlg/` |
 | `clients/` | `core/`, `config/`, `infrastructure/http/`, `infrastructure/observability/` | `main/`, `pregraph/`, `graph/`, `channels/`, `nlg/` |
 | `graph/` | `core/`, `config/`, `infrastructure/llm/`, `infrastructure/observability/`, `clients/` (por tipo), `security/` | `main/`, `channels/`, `pregraph/`, `nlg/` |
-| `pregraph/` | `core/`, `config/`, `clients/`, `infrastructure/`, `security/`, `graph/` (solo `compile()` y tipos) | `main/`, `channels/` (recibe `ChannelAdapter` por inyección) |
+| `pregraph/` | `core/`, `config/`, `clients/`, `infrastructure/`, `security/`, `graph/` (solo `compile()` y tipos) | `main/`, `channels/` (recibe `MessageProcessor` y el `OutboundChannelRegistry` —tipo de `core/`— por inyección) |
 | `nlg/` | `core/`, `config/` | TODO el resto |
-| `outbound/` | `core/`, `config/`, `infrastructure/` (redis, observability), `nlg/` (por tipo) | `main/`, `graph/`, `pregraph/`, `clients/`, `channels/` (directo — recibe `WhatsAppSender` por inyección) |
+| `outbound/` | `core/`, `config/`, `infrastructure/` (redis, observability) | `main/`, `graph/`, `pregraph/`, `clients/`, `nlg/`, `channels/` (recibe el `OutboundChannelRegistry` —tipo de `core/`— por inyección) |
 | `channels/` | `core/`, `config/`, `security/`, `infrastructure/observability/`, `nlg/` (por tipo) | `main/`, `pregraph/`, `graph/`, `outbound/` |
 | `main/` | TODAS | — |
 
@@ -480,17 +480,20 @@ Todo texto del usuario pasa por `sanitizeUserInput()` (security/guardrails.ts): 
 Cada canal en `channels/{name}/`:
 - `webhook.ts` o `handler.ts` — entry point HTTP
 - `normalizer.ts` — payload externo → `ChannelMessage`
-- `sender.ts` — `ChannelMessage` → API externa
+- `sender.ts` — payload de canal → API externa
 - `types.ts` — tipos del payload externo
 - `{Name}InboundAdapter.ts` — implementa `InboundChannelAdapter` (monta sus rutas + body-parser propio)
+- `{Name}OutboundAdapter.ts` — implementa `OutboundChannelAdapter` (formato + resolución de credencial + sender; contraparte de egress)
 
-NUNCA mezclar lógica entre canales. Si dos canales necesitan lo mismo → `ChannelAdapter.ts` o `core/`.
+NUNCA mezclar lógica entre canales. Si dos canales necesitan lo mismo → `ChannelAdapter.ts`, `core/types/OutboundChannel.ts`, o `core/`.
 
-`channels/ChannelAdapter.ts` define dos contratos: `MessageProcessor` (canal → pipeline) e `InboundChannelAdapter` (canal → Express: `{ channelType; register(app, processor) }`).
+`channels/ChannelAdapter.ts` define los contratos de ENTRADA (dependen de `Express`): `MessageProcessor` (canal → pipeline) e `InboundChannelAdapter` (canal → Express: `{ channelType; register(app, processor) }`). El contrato de SALIDA `OutboundChannelAdapter` (+ `OutboundChannelRegistry`) vive en `core/types/OutboundChannel.ts` porque solo referencia tipos de `core/` — así `pregraph/` y `outbound/` lo resuelven por `channelType` sin importar `channels/` (§2 / §12.6).
 
 ### 12.1.1 — `ChannelMessage` estandarizado (entrante)
 
 Todo mensaje entrante se normaliza a un `ChannelMessage` con un discriminador `contentType` REQUERIDO (`core/enums/InboundContentType.ts`: `text | interactive | template_button | image | audio | video | document | location`). El normalizer DEBE setearlo en toda rama; `contentText` es el texto humano canónico para todo tipo (caption en media, name/address en location). Payloads estructurados opcionales: `media` (image/audio/video/document), `location`, `templateButton` (`contextMessageId` + `payload`; solapa a propósito con `interactivePayload`, que sigue siendo el carrier de routing de `detectButtonShortcut`/resume). Contenido no procesable (media/location) NO se dropea: se transporta y el supervisor responde un canned reply sin LLM (ver §8.2 / `graph/supervisor/unsupportedContent.ts`).
+
+El routing/credenciales específico del canal va en `channelMeta?: Readonly<Record<string, string>>` — un mapa OPACO que el pre-grafo NO interpreta (solo transporta). Cada canal define sus claves; **`core/` NO tipa claves por canal** (mantiene agnosticidad). WhatsApp usa `channelMeta.phoneNumberId` (selección del token emisor) y `channelMeta.role` (`'staff'|'client'`). El único lugar que lee esas claves es el `WhatsAppOutboundAdapter` (camino reactivo) y, como hint opaco, el pipeline al pasar `phoneNumberId` al identity resolve.
 
 ### 12.2 — Multi-Platform WhatsApp (dual cliente/staff)
 
@@ -501,29 +504,52 @@ WhatsApp tiene un `phone_number_id` por **(plataforma, rol)** (heredado de IDP v
 - `APP_SECRET_BY_PLATFORM: platformId → app_secret`
 
 **Reglas:**
-- Normalizer rellena `whatsappChannel: 'staff'|'client'` en `ChannelMessage`.
-- `IdentityResolver` consulta Guacuco con `(channelType, channelId, phoneNumberId)`. El `profileType` resultante refleja el rol del phone_number_id.
+- Normalizer rellena `channelMeta: { phoneNumberId, role: 'staff'|'client' }` en `ChannelMessage`.
+- `IdentityResolver` consulta Guacuco con `(channelType, channelId, phoneNumberId)` — el `phoneNumberId` viene de `channelMeta.phoneNumberId` como hint opaco. El `profileType` resultante refleja el rol del phone_number_id.
 - `state.identity.profileType` viene del map + Guacuco — **NUNCA del LLM, NUNCA del payload del usuario**.
 - HMAC del webhook entrante: el handler pre-parsea el body (untrusted) solo para extraer `phone_number_id`, resuelve `WhatsAppPhoneConfig` y luego mira `APP_SECRET_BY_PLATFORM.get(cfg.platformId)` para elegir el secret antes de validar firma. Los datos parseados NO se usan para business logic hasta después de validar HMAC. Dev-only: `WHATSAPP_SKIP_SIGNATURE=true` saltea el HMAC (jamás en producción; el parse de `env.ts` hace fail-fast si combinás esa flag con `NODE_ENV=production`).
 
-### 12.3 — Agnosticidad de canal
+### 12.3 — Agnosticidad de canal (ENTRADA **y** SALIDA)
 
-El grafo NO conoce el canal de origen. `state.identity.channel` es informativo y se usa solo en `ResponseBuilder` y para el `thread_id`. Para agregar Telegram/web/mobile basta:
+El grafo NO conoce el canal de origen. `state.identity.channel` es informativo y se usa solo en formato de salida y para el `thread_id`. La agnosticidad es **simétrica**: ni el grafo, ni el pre-grafo, ni el dispatch conocen canales concretos. Para agregar Telegram/web/mobile:
 
-1. Crear `channels/{nuevo}/` con normalizer + sender + un `{Nuevo}InboundAdapter` que implemente `InboundChannelAdapter`.
-2. Push del adapter al array `inboundChannels` en `bootstrap.ts` (lo demás lo itera `registerRoutes`).
-3. (Opcional) extender `ResponseBuilder` con formato específico.
-4. **El grafo no se toca.**
+1. Crear `channels/{nuevo}/` con normalizer + sender + `{Nuevo}InboundAdapter` (implementa `InboundChannelAdapter`) + `{Nuevo}OutboundAdapter` (implementa `OutboundChannelAdapter`).
+2. Push del inbound adapter al array `inboundChannels` y del outbound adapter al `Map` `outboundRegistry` en `bootstrap.ts`.
+3. (Opcional) extender `ResponseBuilder` con un `buildFor{Canal}` y sus límites en `CHANNEL_FORMATS`.
+4. **El grafo NO se toca. `ResponseDispatcher`, `OutboundMessageService` y `core/` NO se tocan.**
+
+**Regla dura: CERO `if (channelType === 'x')` en `pregraph/` ni en `outbound/`.** La resolución del canal es siempre por registry (`registry.get(channelType)`). El dispatch reactivo (`ResponseDispatcher`) y el proactivo (`OutboundMessageService`) resuelven el `OutboundChannelAdapter` por `channelType` y delegan; el canal desconocido se loguea como `warn` (reactivo) o lanza `channel_not_configured` (proactivo), nunca se ramifica por nombre.
 
 ### 12.4 — `CHANNEL_FORMATS` centralizado
 
 Límites de cada plataforma viven en `config/channel-formats.config.ts`. WhatsApp: text 4096, body 1024, ≤3 buttons, list ≤10 rows, button title 20, row title 24, row description 72.
 
-**NUNCA hardcodear límites de Meta/Telegram** en `ResponseBuilder`, senders, o nodos del grafo — siempre leer de `CHANNEL_FORMATS[channelType]`. Si Meta/Telegram actualizan API, se edita un archivo.
+**NUNCA hardcodear límites de Meta/Telegram** en `ResponseBuilder`, senders, o nodos del grafo — siempre leer de `CHANNEL_FORMATS[channelType]`. El formato vive en `nlg/ResponseBuilder.buildFor{Canal}` y se invoca **a través** del `OutboundChannelAdapter` del canal (los adapters/senders nunca hardcodean límites). Si Meta/Telegram actualizan API, se edita un archivo.
 
 ### 12.5 — Webhook responde 200 SIEMPRE (excepto auth fail)
 
 Ver §7.4.
+
+### 12.6 — Contrato de SALIDA simétrico (`OutboundChannelAdapter`)
+
+`core/types/OutboundChannel.ts` define el contrato de egress, simétrico a `InboundChannelAdapter` pero en `core/` (solo referencia tipos puros, no `Express`):
+
+```typescript
+interface OutboundChannelAdapter {
+  readonly channelType: ChannelType;
+  replyTo(message: ChannelMessage, reply: OutboundReply): Promise<void>;   // reactivo: pre-grafo → usuario
+  sendProactive(dto: OutboundMessageDto): Promise<{ messageId: string }>;  // proactivo: S2S → usuario
+}
+type OutboundChannelRegistry = ReadonlyMap<ChannelType, OutboundChannelAdapter>;
+```
+
+**Dos caminos, un adapter por canal:**
+- **Reactivo** (`replyTo`): lo usa `ResponseDispatcher`. Formatea el `OutboundReply` y envía al autor del `ChannelMessage`, leyendo el routing de `channelMeta`. No-op + log si el reply queda vacío o falta routing.
+- **Proactivo** (`sendProactive`): lo usa `OutboundMessageService`. Resuelve la credencial emisora desde el DTO (`role`/`platformId` en WhatsApp), formatea y envía.
+
+**Dueños:** `OutboundMessageService` (capa `outbound/`) es dueño de la **idempotencia** (Redis `SET NX` por `idempotencyKey`) y resuelve el adapter por `channelType`. El **adapter** (capa `channels/`) es dueño de resolver credencial + formatear + enviar. El formateo se delega a `nlg/` (centraliza `CHANNEL_FORMATS`). El registry lo arma `bootstrap.ts` y lo inyecta en ambos consumidores.
+
+**DTO S2S agnóstico:** `OutboundMessageDto` (core) lleva un discriminador `channelType` (default `'whatsapp'` en el schema zod para backward-compat con Guacuco). `role`/`platformId` son ejes de producto cross-channel (no WhatsApp-only). El ingress HTTP (`infrastructure/http/outboundHttpHandler.ts` + `outboundSchema.ts`) es agnóstico — depende solo de `core/` (`OutboundSender`).
 
 ---
 
@@ -550,6 +576,8 @@ IdpError(code, message)         // base — code snake_case
 ```
 
 NUNCA `new Error('...')` desde `clients/`, `pregraph/`, `graph/`, `channels/`, `nlg/`. Usar `core/errors/`.
+
+**Flag `upstreamDeliveryFailure` (channel-agnóstico).** `IdpError` acepta un 4º arg `options?: { upstreamDeliveryFailure?: boolean }` (default `false`). Cuando un sender de canal no logra entregar al proveedor (Meta, Telegram, etc.), lanza su `IdpError` con `{ upstreamDeliveryFailure: true }`. El ingress S2S (`outboundHttpHandler`) mapea ese flag a **HTTP 502**; cualquier otro `IdpError` a **400**. Esto reemplaza el viejo set hardcodeado de códigos `whatsapp_*` (`SEND_FAILURE_CODES`) — el mapeo de status NO depende del spelling del código ni del canal.
 
 ### 13.3 — Outcome como discriminated union, no excepciones para control de flujo
 
@@ -703,8 +731,10 @@ Equivalente al §19 de IDP v2. Lista canónica a definir al codear; candidatos T
 - Supervisor router (decide qué subgrafo se activa)
 - `validateWebhookSignature` (auth)
 - `BaseHttpClient.unwrap` (contrato de errores)
+- `WhatsAppSender.send` (entrega al proveedor) — y todo sender de canal
 - Orden de pasos del pre-grafo
 - Orden de cleanup en bootstrap
+- Shape de `IdpError` (la base de la jerarquía de errores) — agregar campos requiere mantener backward-compat (campos opcionales defaulteados, como `upstreamDeliveryFailure`)
 
 Modificación requiere: leer archivo completo → presentar propuesta → esperar aprobación del owner → `npm run typecheck` + `npm test` → preferir código nuevo junto al existente.
 
@@ -734,6 +764,8 @@ Modificación requiere: leer archivo completo → presentar propuesta → espera
 - Retornar 5xx desde un webhook por errores de procesamiento
 - Mutar bloques del state que no son del nodo actual (ver tabla §8.2)
 - Mutar `state.identity` o `state.input` desde adentro del grafo
+- Ramificar por `if (channelType === 'x')` en `pregraph/` o `outbound/` — resolver el canal SIEMPRE por el `OutboundChannelRegistry`
+- Poner claves específicas de un canal en `ChannelMessage` del core (usar `channelMeta` opaco; las claves las conoce solo el adapter del canal)
 - Construir mensajes confirmatorios que incluyan UUIDs o IDs internos
 - Modificar el orden de pasos del pre-grafo o del bootstrap sin entender consecuencias
 - Crear `.md` en raíz del proyecto salvo `README.md` y `CLAUDE.md`
@@ -763,6 +795,8 @@ Modificación requiere: leer archivo completo → presentar propuesta → espera
 - Catch global del pre-grafo → Sentry + respuesta genérica al usuario
 - Fire-and-forget vía `swallowAsync(logger, label, promise, ctx?)`
 - Leer límites de formato de canal desde `CHANNEL_FORMATS`
+- Resolver el canal de salida por `OutboundChannelRegistry.get(channelType)` (reactivo y proactivo); agregar canal = nuevo `{Nombre}OutboundAdapter` + push al registry, sin tocar dispatch/service/core
+- Marcar fallos de entrega del proveedor con `IdpError(..., { upstreamDeliveryFailure: true })` para el mapeo a 502
 - Verificar TTL del checkpoint inline + correr job periódico de cleanup
 - Logear con contexto estructurado (`logger.info(msg, {...ctx})`)
 - Enmascarar teléfonos en logs (`maskPhoneNumber`)

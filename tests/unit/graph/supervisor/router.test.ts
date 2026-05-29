@@ -30,8 +30,7 @@ function makeState(routing: RoutingState, identity: Identity = IDENTITY_CLIENT):
     contentType: 'text',
     contentText: '',
     receivedAt: new Date().toISOString(),
-    whatsappChannel: 'client',
-    phoneNumberId: 'pn-1',
+    channelMeta: { phoneNumberId: 'pn-1', role: 'client' },
     interactivePayload: null,
   };
   return {

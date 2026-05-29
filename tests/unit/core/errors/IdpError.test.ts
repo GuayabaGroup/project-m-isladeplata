@@ -14,6 +14,14 @@ describe('IdpError hierarchy', () => {
     expect(err).toBeInstanceOf(Error);
   });
 
+  it('upstreamDeliveryFailure defaults to false and can be set explicitly', () => {
+    expect(new IdpError('x', 'y').upstreamDeliveryFailure).toBe(false);
+    const flagged = new IdpError('whatsapp_send_failed', 'boom', undefined, {
+      upstreamDeliveryFailure: true,
+    });
+    expect(flagged.upstreamDeliveryFailure).toBe(true);
+  });
+
   it('IdentityNotFoundError extends IdpError with fixed code', () => {
     const err = new IdentityNotFoundError();
     expect(err).toBeInstanceOf(IdpError);
