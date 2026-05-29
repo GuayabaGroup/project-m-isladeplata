@@ -1,6 +1,7 @@
 import type { Logger } from 'winston';
 import { env } from '../../config/env.js';
 import { IdpError } from '../../core/errors/IdpError.js';
+import { maskPhoneNumber } from '../../core/maskPhoneNumber.js';
 import type { OutboundHttpClient } from '../../core/types/HttpClient.js';
 import type { WhatsAppOutboundMessage } from './types.js';
 
@@ -51,7 +52,7 @@ export class WhatsAppSender {
       }
       this.logger.info('WhatsApp message sent', {
         phoneNumberId: input.phoneNumberId,
-        to: maskPhone(input.message.to),
+        to: maskPhoneNumber(input.message.to),
         type: input.message.type,
         messageId,
       });
@@ -61,7 +62,7 @@ export class WhatsAppSender {
       if (err instanceof IdpError) {
         this.logger.error('Failed to send WhatsApp message', {
           phoneNumberId: input.phoneNumberId,
-          to: maskPhone(input.message.to),
+          to: maskPhoneNumber(input.message.to),
           code: err.code,
         });
         throw err;
@@ -72,7 +73,7 @@ export class WhatsAppSender {
       const meta = extractMetaError(err);
       this.logger.error('Failed to send WhatsApp message', {
         phoneNumberId: input.phoneNumberId,
-        to: maskPhone(input.message.to),
+        to: maskPhoneNumber(input.message.to),
         error: err instanceof Error ? err.message : String(err),
         meta,
       });
@@ -91,9 +92,4 @@ function extractMetaError(err: unknown): unknown {
   if (typeof err !== 'object' || err === null) return undefined;
   const response = (err as { response?: { data?: { error?: unknown } } }).response;
   return response?.data?.error;
-}
-
-function maskPhone(phone: string): string {
-  if (phone.length <= 4) return '***';
-  return `${phone.slice(0, 3)}***${phone.slice(-2)}`;
 }

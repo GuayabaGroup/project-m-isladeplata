@@ -30,8 +30,6 @@ export interface SubgraphMeta {
   toolCalls?: ToolCallRecord[];
 }
 
-export const EMPTY_META: SubgraphMeta = { attempts: 0, recoverableErrors: [] };
-
 /**
  * Merge canónico de `meta` para los reducers de subgrafo: `attempts` SUMA,
  * `recoverableErrors` y `toolCalls` APPEND. Centraliza la semántica que los 4

@@ -31,5 +31,3 @@ export interface RecentTemplate {
   platformId: number | null;
   createdAt: string;
 }
-
-export const EMPTY_RECENT_TEMPLATES: RecentTemplate[] = [];

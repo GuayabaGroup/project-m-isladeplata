@@ -56,5 +56,3 @@ export const QUERY_JUDGE_CONFIG = {
   maxTokens: 512,
   failMode: env.QUERY_JUDGE_FAIL_MODE,
 } as const;
-
-export type LlmConfig = typeof SUPERVISOR_CONFIG;

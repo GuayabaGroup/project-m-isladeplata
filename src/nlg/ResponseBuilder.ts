@@ -1,5 +1,6 @@
 import type { Logger } from 'winston';
 import { CHANNEL_FORMATS, truncate } from '../config/channel-formats.config.js';
+import { maskPhoneNumber } from '../core/maskPhoneNumber.js';
 import type { OutboundReply } from '../core/types/Outcome.js';
 import type { WhatsAppOutboundMessage } from '../core/types/WhatsAppOutbound.js';
 
@@ -100,12 +101,7 @@ export class ResponseBuilder {
       };
     }
 
-    this.logger.warn('Empty reply, nothing to send', { to: maskPhone(to) });
+    this.logger.warn('Empty reply, nothing to send', { to: maskPhoneNumber(to) });
     return null;
   }
-}
-
-function maskPhone(phone: string): string {
-  if (phone.length <= 4) return '***';
-  return `${phone.slice(0, 3)}***${phone.slice(-2)}`;
 }

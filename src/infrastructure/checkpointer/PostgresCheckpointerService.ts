@@ -53,7 +53,11 @@ export async function createCheckpointerService(logger: Logger): Promise<Checkpo
     const client = await pool.connect();
     client.release();
   } catch (err) {
-    await pool.end().catch(() => {});
+    await pool.end().catch((endErr: unknown) => {
+      logger.warn('pool.end() failed during connect-error cleanup', {
+        error: endErr instanceof Error ? endErr.message : String(endErr),
+      });
+    });
     throw new IdpError('postgres_connect_failed', 'Could not connect to agent Postgres', {
       error: err instanceof Error ? err.message : String(err),
     });
@@ -92,7 +96,11 @@ export async function createCheckpointerService(logger: Logger): Promise<Checkpo
       await client.query('DELETE FROM checkpoints WHERE thread_id = $1', [threadId]);
       await client.query('COMMIT');
     } catch (err) {
-      await client.query('ROLLBACK').catch(() => {});
+      await client.query('ROLLBACK').catch((rbErr: unknown) => {
+        logger.warn('ROLLBACK failed', {
+          error: rbErr instanceof Error ? rbErr.message : String(rbErr),
+        });
+      });
       throw err;
     } finally {
       client.release();
@@ -125,7 +133,11 @@ export async function createCheckpointerService(logger: Logger): Promise<Checkpo
       logger.info('Checkpointer cleanup deleted expired threads', { threads: threadIds.length });
       return threadIds.length;
     } catch (err) {
-      await client.query('ROLLBACK').catch(() => {});
+      await client.query('ROLLBACK').catch((rbErr: unknown) => {
+        logger.warn('ROLLBACK failed', {
+          error: rbErr instanceof Error ? rbErr.message : String(rbErr),
+        });
+      });
       throw err;
     } finally {
       client.release();

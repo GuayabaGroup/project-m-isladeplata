@@ -9,7 +9,3 @@ export const INBOUND_CONTENT_TYPES = [
   'location',
 ] as const;
 export type InboundContentType = (typeof INBOUND_CONTENT_TYPES)[number];
-
-export function isInboundContentType(value: unknown): value is InboundContentType {
-  return typeof value === 'string' && (INBOUND_CONTENT_TYPES as readonly string[]).includes(value);
-}

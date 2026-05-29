@@ -1,5 +1,6 @@
 import type { Logger } from 'winston';
 import { IdpError } from '../core/errors/IdpError.js';
+import { maskPhoneNumber } from '../core/maskPhoneNumber.js';
 import type { OutboundChannelRegistry } from '../core/types/OutboundChannel.js';
 import type { OutboundMessageDto, OutboundSender } from '../core/types/OutboundMessage.js';
 import type { DedupStore } from '../infrastructure/redis/DedupStore.js';
@@ -65,15 +66,10 @@ export class OutboundMessageService implements OutboundSender {
       channelType: dto.channelType,
       platformId: dto.platformId,
       role: dto.role,
-      to: maskPhone(dto.to),
+      to: maskPhoneNumber(dto.to),
       messageId,
     });
 
     return { messageId };
   }
-}
-
-function maskPhone(phone: string): string {
-  if (phone.length <= 4) return '***';
-  return `${phone.slice(0, 3)}***${phone.slice(-2)}`;
 }
