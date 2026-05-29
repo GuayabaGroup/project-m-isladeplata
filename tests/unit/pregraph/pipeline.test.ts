@@ -9,6 +9,7 @@ import { ToolExecutionError } from '../../../src/core/errors/ToolExecutionError.
 import type { ChannelMessage } from '../../../src/core/types/ChannelMessage.js';
 import { EMPTY_CRM_CONTEXT } from '../../../src/core/types/CrmContext.js';
 import type { Outcome } from '../../../src/core/types/Outcome.js';
+import type { RecentTemplate } from '../../../src/core/types/RecentTemplate.js';
 import type { CompiledGraph } from '../../../src/graph/compile.js';
 import {
   metricsRegistry,
@@ -87,7 +88,10 @@ function makeDeps() {
   const rateLimit = {
     checkLimit: vi.fn().mockResolvedValue({ allowed: true, count: 1, remaining: 19, limit: 20 }),
   };
-  const guacuco = { resolveIdentity: vi.fn() };
+  const guacuco = {
+    resolveIdentity: vi.fn(),
+    getRecentTemplates: vi.fn().mockResolvedValue([]),
+  };
   const parguito = { getCrmContext: vi.fn().mockResolvedValue(EMPTY_CRM_CONTEXT) };
   const dispatcher = { dispatch: vi.fn().mockResolvedValue(undefined) };
   const persister = { persistTurn: vi.fn().mockResolvedValue(undefined) };
@@ -114,6 +118,7 @@ function makeDeps() {
         pendingReply: { text: '[grafo] Recibido (cliente): "hola"' },
       } satisfies Outcome,
     }),
+    getState: vi.fn().mockResolvedValue({ tasks: [] }),
   };
   const logger = {
     info: vi.fn(),
@@ -417,6 +422,99 @@ describe('Pipeline.process', () => {
     expect(outcome.action).toBe('ignored');
     expect(mocks.rateLimit.checkLimit).not.toHaveBeenCalled();
     expect(mocks.graph.invoke).not.toHaveBeenCalled();
+  });
+});
+
+describe('Pipeline.process — recent template context', () => {
+  const template = (overrides: Partial<RecentTemplate> = {}): RecentTemplate => ({
+    templateName: 'p11_appointment_reminder_24h',
+    userType: 'client',
+    langCode: 'es',
+    parameters: [{ type: 'text', text: '30/05/2026' }],
+    channelPhoneNumberId: 'pn-1',
+    metaMessageId: 'wamid.ABC',
+    status: 'sent',
+    sourceComponent: 'notification.appointment',
+    platformId: 1,
+    createdAt: '2026-05-29T14:30:00Z',
+    ...overrides,
+  });
+
+  it('fetches recent templates (by recipient phone) and passes them to graph.invoke', async () => {
+    const { deps, mocks } = makeDeps();
+    mocks.guacuco.resolveIdentity.mockResolvedValue(fullIdentity());
+    mocks.guacuco.getRecentTemplates.mockResolvedValue([template()]);
+    const pipeline = new Pipeline(deps);
+
+    await pipeline.process(makeMessage({ channelId: '54911000000' }));
+
+    expect(mocks.guacuco.getRecentTemplates).toHaveBeenCalledWith({
+      recipientPhone: '54911000000',
+      windowHours: env.TEMPLATE_CONTEXT_WINDOW_HOURS,
+      limit: env.TEMPLATE_CONTEXT_LIMIT,
+      status: 'sent',
+    });
+    const [initialState] = mocks.graph.invoke.mock.calls[0] ?? [];
+    expect((initialState as { recentTemplates: RecentTemplate[] }).recentTemplates).toHaveLength(1);
+  });
+
+  it('filters out templates from a different platform (cross-platform scoping)', async () => {
+    const { deps, mocks } = makeDeps();
+    mocks.guacuco.resolveIdentity.mockResolvedValue(fullIdentity()); // platform_id = 1
+    mocks.guacuco.getRecentTemplates.mockResolvedValue([
+      template({ platformId: 1 }),
+      template({ platformId: 2, metaMessageId: 'wamid.OTHER' }),
+      template({ platformId: null, metaMessageId: 'wamid.NULL' }), // sin platform → se conserva
+    ]);
+    const pipeline = new Pipeline(deps);
+
+    await pipeline.process(makeMessage());
+
+    const [initialState] = mocks.graph.invoke.mock.calls[0] ?? [];
+    const passed = (initialState as { recentTemplates: RecentTemplate[] }).recentTemplates;
+    expect(passed.map((t) => t.metaMessageId)).toEqual(['wamid.ABC', 'wamid.NULL']);
+  });
+
+  it('fail-open: passes [] and continues when getRecentTemplates rejects', async () => {
+    const { deps, mocks } = makeDeps();
+    mocks.guacuco.resolveIdentity.mockResolvedValue(fullIdentity());
+    mocks.guacuco.getRecentTemplates.mockRejectedValue(new Error('guacuco down'));
+    const pipeline = new Pipeline(deps);
+
+    const outcome = await pipeline.process(makeMessage());
+
+    expect(outcome.action).toBe('response');
+    const [initialState] = mocks.graph.invoke.mock.calls[0] ?? [];
+    expect((initialState as { recentTemplates: RecentTemplate[] }).recentTemplates).toEqual([]);
+    expect(mocks.logger.warn).toHaveBeenCalled();
+  });
+
+  it('does NOT fetch templates when TEMPLATE_CONTEXT_ENABLED=false', async () => {
+    env.TEMPLATE_CONTEXT_ENABLED = false;
+    try {
+      const { deps, mocks } = makeDeps();
+      mocks.guacuco.resolveIdentity.mockResolvedValue(fullIdentity());
+      const pipeline = new Pipeline(deps);
+
+      await pipeline.process(makeMessage());
+
+      expect(mocks.guacuco.getRecentTemplates).not.toHaveBeenCalled();
+      const [initialState] = mocks.graph.invoke.mock.calls[0] ?? [];
+      expect((initialState as { recentTemplates: RecentTemplate[] }).recentTemplates).toEqual([]);
+    } finally {
+      env.TEMPLATE_CONTEXT_ENABLED = true;
+    }
+  });
+
+  it('does NOT fetch templates when the thread has a pending interrupt (resume turn)', async () => {
+    const { deps, mocks } = makeDeps();
+    mocks.guacuco.resolveIdentity.mockResolvedValue(fullIdentity());
+    mocks.graph.getState.mockResolvedValue({ tasks: [{ interrupts: [{ value: {} }] }] });
+    const pipeline = new Pipeline(deps);
+
+    await pipeline.process(makeMessage());
+
+    expect(mocks.guacuco.getRecentTemplates).not.toHaveBeenCalled();
   });
 });
 

@@ -83,3 +83,9 @@ process.env.IDP_API_KEY = process.env.IDP_API_KEY ?? 'test-idp-api-key-123456789
 // Contenido de plataforma (Nivel B, H9.2). Tiene default en env.ts; los tests
 // del loader pasan su propio baseDir, así que esto solo fija un valor estable.
 process.env.CONTENT_DIR = process.env.CONTENT_DIR ?? './content';
+
+// Contexto de templates proactivos — todas con default en env.ts; explícitas
+// acá para que los tests puedan apagar/ajustar la feature antes del import.
+process.env.TEMPLATE_CONTEXT_ENABLED = process.env.TEMPLATE_CONTEXT_ENABLED ?? 'true';
+process.env.TEMPLATE_CONTEXT_WINDOW_HOURS = process.env.TEMPLATE_CONTEXT_WINDOW_HOURS ?? '48';
+process.env.TEMPLATE_CONTEXT_LIMIT = process.env.TEMPLATE_CONTEXT_LIMIT ?? '5';

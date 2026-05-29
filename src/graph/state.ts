@@ -6,6 +6,7 @@ import type { ChannelMessage } from '../core/types/ChannelMessage.js';
 import { type CrmContext, EMPTY_CRM_CONTEXT } from '../core/types/CrmContext.js';
 import type { Identity } from '../core/types/Identity.js';
 import type { Outcome } from '../core/types/Outcome.js';
+import type { RecentTemplate } from '../core/types/RecentTemplate.js';
 import { subgraphReducerDispatch } from './subgraphs/subgraphReducer.js';
 import type { ButtonShortcut } from './supervisor/buttonShortcut.js';
 import type { ToolName } from './supervisor/filterTools.js';
@@ -81,6 +82,7 @@ export function mergeRouting(current: RoutingState, next: Partial<RoutingState>)
  * | identity      | pre-graph adapter (inmutable durante el turno)      |
  * | crmContext    | pre-graph adapter (carga única); nodos pueden refrescar opt-in |
  * | catalog       | pre-graph adapter (carga única desde identity.helpersLists)    |
+ * | recentTemplates | pre-graph adapter (carga única; templates proactivos enviados) |
  * | routing       | supervisor                                          |
  * | subgraphState | el subgrafo activo                                  |
  * | outcome       | subgrafo activo al cerrar / supervisor en fast-paths |
@@ -107,6 +109,13 @@ export const GraphStateAnnotation = Annotation.Root({
   catalog: Annotation<CatalogState>({
     reducer: replaceWith,
     default: () => EMPTY_CATALOG,
+  }),
+  // Templates proactivos (recordatorios, confirmaciones) enviados a este usuario
+  // recientemente. Carga única por turno (pre-grafo), replace-only. Da contexto
+  // al supervisor para interpretar respuestas de texto libre al último template.
+  recentTemplates: Annotation<RecentTemplate[]>({
+    reducer: replaceWith,
+    default: () => [],
   }),
   routing: Annotation<RoutingState>({
     reducer: mergeRouting,

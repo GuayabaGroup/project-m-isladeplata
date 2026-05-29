@@ -4,6 +4,7 @@ import type { Logger } from 'winston';
 import type { ChannelMessage } from '../../../../src/core/types/ChannelMessage.js';
 import { EMPTY_CRM_CONTEXT } from '../../../../src/core/types/CrmContext.js';
 import type { Identity } from '../../../../src/core/types/Identity.js';
+import type { RecentTemplate } from '../../../../src/core/types/RecentTemplate.js';
 import type { GraphState } from '../../../../src/graph/state.js';
 import { makeClassifyIntentNode } from '../../../../src/graph/supervisor/classifyIntent.js';
 import {
@@ -212,6 +213,55 @@ describe('classifyIntent node', () => {
     });
     const update = await node(makeState('hola buenas'));
     expect(update.routing?.messageType).toBe('greeting');
+  });
+});
+
+describe('classifyIntent recent-template context', () => {
+  function makeProviderWithSpy(): { llm: AnthropicProvider; create: ReturnType<typeof vi.fn> } {
+    const create = vi.fn(async () =>
+      makeStubMessage('{"messageType":"action","intent":"confirm","confidence":0.9}'),
+    );
+    const client: AnthropicMessagesLike = { create };
+    return {
+      llm: new AnthropicProvider({ apiKey: 'test-anthropic-key', logger: mockLogger, client }),
+      create,
+    };
+  }
+
+  const reminderTemplate: RecentTemplate = {
+    templateName: 'p11_appointment_reminder_24h',
+    userType: 'client',
+    langCode: 'es',
+    parameters: [
+      { type: 'text', text: 'Juan' },
+      { type: 'text', text: '30/05/2026' },
+      { type: 'text', text: '11:30' },
+    ],
+    channelPhoneNumberId: 'pn-1',
+    metaMessageId: 'wamid.ABC',
+    status: 'sent',
+    sourceComponent: 'notification.appointment',
+    platformId: 1,
+    createdAt: '2026-05-29T14:30:00Z',
+  };
+
+  it('injects the recent-template block into the system prompt when present', async () => {
+    const { llm, create } = makeProviderWithSpy();
+    const node = makeClassifyIntentNode({ llm, logger: mockLogger });
+    const state = { ...makeState('sí dale'), recentTemplates: [reminderTemplate] } as GraphState;
+    await node(state);
+    const sys = (create.mock.calls[0]?.[0] as { system?: string }).system ?? '';
+    expect(sys).toContain('Mensajes automáticos (templates) que LE ENVIAMOS');
+    expect(sys).toContain('Recordatorio de un turno próximo');
+    expect(sys).toContain('30/05/2026');
+  });
+
+  it('does NOT append the template block when there are no recent templates', async () => {
+    const { llm, create } = makeProviderWithSpy();
+    const node = makeClassifyIntentNode({ llm, logger: mockLogger });
+    await node(makeState('hola'));
+    const sys = (create.mock.calls[0]?.[0] as { system?: string }).system ?? '';
+    expect(sys).not.toContain('Mensajes automáticos (templates)');
   });
 });
 

@@ -125,6 +125,45 @@ export interface ResolveIdentityOutput {
 }
 
 // ============================================================================
+// Recent templates — GET /api/v1/template-send-log/recent (snake_case params)
+// ============================================================================
+
+/**
+ * Input tipado para `getRecentTemplates`. El pre-grafo pasa el teléfono del
+ * destinatario (`message.channelId`). `windowHours`/`limit` los acota Guacuco
+ * (1..168 / 1..50); omitirlos usa los defaults del backend.
+ */
+export interface GetRecentTemplatesInput {
+  recipientPhone: string;
+  windowHours?: number;
+  limit?: number;
+  status?: 'sent' | 'all';
+}
+
+/** Raw shape de cada entrada del log (snake_case). Confinado al client + mapper. */
+export interface RecentTemplateRaw {
+  log_uuid: string;
+  template_name: string;
+  recipient_phone: string;
+  user_type: string;
+  lang_code: string;
+  parameters: unknown[];
+  channel_phone_number_id: string | null;
+  meta_message_id: string | null;
+  status: 'sent' | 'failed';
+  source_component: string;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+}
+
+/** Envelope `data` de `GET /api/v1/template-send-log/recent`. */
+export interface RecentTemplatesRawResponse {
+  templates: RecentTemplateRaw[];
+  count: number;
+  window_hours: number;
+}
+
+// ============================================================================
 // Tool execute — POST /api/v1/tools/execute
 // ============================================================================
 

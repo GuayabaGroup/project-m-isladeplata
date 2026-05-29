@@ -4,8 +4,10 @@ import { IdentityNotFoundError } from '../core/errors/IdentityNotFoundError.js';
 import { IdpError } from '../core/errors/IdpError.js';
 import { ToolExecutionError } from '../core/errors/ToolExecutionError.js';
 import type { Identity } from '../core/types/Identity.js';
+import type { RecentTemplate } from '../core/types/RecentTemplate.js';
 import { BaseHttpClient } from './BaseHttpClient.js';
 import { mapRawToResolveIdentityOutput } from './mappers/IdentityMapper.js';
+import { mapRawToRecentTemplate } from './mappers/RecentTemplateMapper.js';
 import { toolContextFromIdentity } from './mappers/ToolContextMapper.js';
 import type { Envelope } from './types/Envelope.js';
 import type {
@@ -15,6 +17,7 @@ import type {
   CheckAvailabilityResult,
   ConfirmAppointmentParams,
   ConfirmAppointmentResult,
+  GetRecentTemplatesInput,
   GetStaffAppointmentsSummaryParams,
   GetStaffAppointmentsSummaryResult,
   IdentityResolveRawResponse,
@@ -23,6 +26,7 @@ import type {
   QueryProcessorExecuteResponse,
   QueryProcessorSchemaResponse,
   QueryProcessorTablesResponse,
+  RecentTemplatesRawResponse,
   RescheduleAppointmentParams,
   RescheduleAppointmentResult,
   ResolveClientParams,
@@ -47,6 +51,7 @@ const QUERY_TABLES_PATH = '/api/v1/query-processor/tables';
 const QUERY_EXECUTE_PATH = '/api/v1/query-processor/query';
 const PERSIST_AGENT_TURNS_PATH = '/api/v1/conversations/agent-turns';
 const TAKEOVER_PATH = '/api/v1/conversations/takeover';
+const RECENT_TEMPLATES_PATH = '/api/v1/template-send-log/recent';
 
 /**
  * Opciones internas de `executeTool`. El `context` siempre se construye vía
@@ -128,6 +133,34 @@ export class GuacucoClient extends BaseHttpClient {
         { status: ax.response?.status },
       );
     }
+  }
+
+  // ==========================================================================
+  // Recent templates (read-only)
+  // ==========================================================================
+
+  /**
+   * Trae los templates proactivos enviados al usuario en una ventana reciente
+   * (`GET /api/v1/template-send-log/recent`, query params snake_case). Read-only.
+   *
+   * Lo consume el pre-grafo para dar al supervisor contexto del último template
+   * (recordatorio, confirmación…) y poder interpretar respuestas de texto libre.
+   * Mapea cada entrada raw → `RecentTemplate` (camelCase). Errores del backend
+   * suben como `ToolExecutionError` (vía `unwrap`); el caller (pre-grafo) los
+   * captura y sigue fail-open con `[]`.
+   */
+  async getRecentTemplates(input: GetRecentTemplatesInput): Promise<RecentTemplate[]> {
+    const params: Record<string, string | number> = { recipient_phone: input.recipientPhone };
+    if (input.windowHours != null) params.window_hours = input.windowHours;
+    if (input.limit != null) params.limit = input.limit;
+    if (input.status) params.status = input.status;
+
+    const response = await this.http.get<Envelope<RecentTemplatesRawResponse>>(
+      RECENT_TEMPLATES_PATH,
+      { params },
+    );
+    const raw = this.unwrap<RecentTemplatesRawResponse>(response);
+    return raw.templates.map(mapRawToRecentTemplate);
   }
 
   // ==========================================================================

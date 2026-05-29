@@ -4,13 +4,13 @@ import type { GuacucoClient } from '../../../../../src/clients/GuacucoClient.js'
 import type { ChannelMessage } from '../../../../../src/core/types/ChannelMessage.js';
 import { EMPTY_CRM_CONTEXT } from '../../../../../src/core/types/CrmContext.js';
 import type { Identity } from '../../../../../src/core/types/Identity.js';
+import type { GraphState } from '../../../../../src/graph/state.js';
+import type { ToolDeps } from '../../../../../src/graph/tools/Tool.js';
+import { forwardMessage } from '../../../../../src/graph/tools/support/forwardMessage.js';
 import type {
   LlmCompleteOutput,
   LlmProvider,
 } from '../../../../../src/infrastructure/llm/LlmProvider.js';
-import type { GraphState } from '../../../../../src/graph/state.js';
-import type { ToolDeps } from '../../../../../src/graph/tools/Tool.js';
-import { forwardMessage } from '../../../../../src/graph/tools/support/forwardMessage.js';
 
 const mockLogger = {
   warn: vi.fn(),
@@ -84,7 +84,10 @@ describe('forwardMessage tool', () => {
     const forward = vi.fn(async () => ({}));
     const update = await forwardMessage.run(
       makeState('Estoy en la <b>puerta</b>'),
-      makeDeps(forward as unknown as GuacucoClient['forwardMessage'], 'El cliente está en la puerta.'),
+      makeDeps(
+        forward as unknown as GuacucoClient['forwardMessage'],
+        'El cliente está en la puerta.',
+      ),
     );
     expect(forward).toHaveBeenCalledWith('El cliente está en la puerta.', IDENTITY);
     expect(update.outcome?.action).toBe('response');

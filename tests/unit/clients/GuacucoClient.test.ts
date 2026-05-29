@@ -698,6 +698,112 @@ describe('GuacucoClient.persistAgentTurns', () => {
   });
 });
 
+describe('GuacucoClient.getRecentTemplates', () => {
+  const rawTemplate = (overrides: Record<string, unknown> = {}) => ({
+    log_uuid: 'log-1',
+    template_name: 'p11_appointment_reminder_24h',
+    recipient_phone: '5491100',
+    user_type: 'client',
+    lang_code: 'es',
+    parameters: [
+      { type: 'text', text: 'Juan' },
+      { type: 'text', text: '30/05/2026' },
+      { type: 'text', text: '11:30' },
+    ],
+    channel_phone_number_id: 'pn-1',
+    meta_message_id: 'wamid.ABC',
+    status: 'sent',
+    source_component: 'notification.appointment',
+    metadata: { platform_id: 3, appointment_uuid: 'apt-1' },
+    created_at: '2026-05-29T14:30:00Z',
+    ...overrides,
+  });
+
+  it('GET /api/v1/template-send-log/recent with snake_case params + maps raw → camelCase', async () => {
+    const mockHttp = makeMockHttp();
+    mockHttp.get.mockResolvedValue(
+      makeResponse({
+        success: true,
+        data: { templates: [rawTemplate()], count: 1, window_hours: 48 },
+      }),
+    );
+
+    const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
+    const result = await client.getRecentTemplates({
+      recipientPhone: '5491100',
+      windowHours: 48,
+      limit: 5,
+      status: 'sent',
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      templateName: 'p11_appointment_reminder_24h',
+      userType: 'client',
+      langCode: 'es',
+      metaMessageId: 'wamid.ABC',
+      status: 'sent',
+      platformId: 3,
+      createdAt: '2026-05-29T14:30:00Z',
+    });
+    expect(mockHttp.get).toHaveBeenCalledWith('/api/v1/template-send-log/recent', {
+      params: { recipient_phone: '5491100', window_hours: 48, limit: 5, status: 'sent' },
+    });
+  });
+
+  it('omits optional params when not provided', async () => {
+    const mockHttp = makeMockHttp();
+    mockHttp.get.mockResolvedValue(
+      makeResponse({ success: true, data: { templates: [], count: 0, window_hours: 48 } }),
+    );
+
+    const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
+    await client.getRecentTemplates({ recipientPhone: '5491100' });
+
+    expect(mockHttp.get).toHaveBeenCalledWith('/api/v1/template-send-log/recent', {
+      params: { recipient_phone: '5491100' },
+    });
+  });
+
+  it('coerces a numeric-string platform_id and defaults missing metadata to null', async () => {
+    const mockHttp = makeMockHttp();
+    mockHttp.get.mockResolvedValue(
+      makeResponse({
+        success: true,
+        data: {
+          templates: [
+            rawTemplate({ metadata: { platform_id: '2' } }),
+            rawTemplate({ log_uuid: 'log-2', metadata: null }),
+          ],
+          count: 2,
+          window_hours: 48,
+        },
+      }),
+    );
+
+    const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
+    const result = await client.getRecentTemplates({ recipientPhone: '5491100' });
+
+    expect(result[0]?.platformId).toBe(2);
+    expect(result[1]?.platformId).toBeNull();
+  });
+
+  it('propagates backend errors as ToolExecutionError', async () => {
+    const mockHttp = makeMockHttp();
+    mockHttp.get.mockResolvedValue(
+      makeResponse({
+        success: false,
+        error: { code: 'RECIPIENT_OR_MESSAGE_ID_REQUIRED', message: 'missing' },
+      }),
+    );
+
+    const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
+    await expect(client.getRecentTemplates({ recipientPhone: '' })).rejects.toBeInstanceOf(
+      ToolExecutionError,
+    );
+  });
+});
+
 describe('GuacucoClient.triggerTakeover', () => {
   const samplePayload: TriggerTakeoverRequest = {
     tenant_allia_id: 'allia-1',

@@ -176,4 +176,28 @@ describe('socialResponder node', () => {
     const update = await node(makeState('pasame con alguien', 'human_request'));
     expect(update.outcome?.takeover).toEqual({ reasonCode: 'other' });
   });
+
+  it('injects the recent-template context into the system prompt when present', async () => {
+    const { llm, create } = makeProvider('OK');
+    const node = makeSocialResponderNode({ llm, logger: mockLogger });
+    const state = makeState('gracias', 'oos');
+    state.recentTemplates = [
+      {
+        templateName: 'p11_appointment_reminder_24h',
+        userType: 'client',
+        langCode: 'es',
+        parameters: [{ type: 'text', text: '30/05/2026' }],
+        channelPhoneNumberId: 'pn-1',
+        metaMessageId: 'wamid.ABC',
+        status: 'sent',
+        sourceComponent: 'notification.appointment',
+        platformId: 1,
+        createdAt: '2026-05-29T14:30:00Z',
+      },
+    ];
+    await node(state);
+    const params = create.mock.calls[0]?.[0];
+    expect(params?.system).toContain('Mensajes automáticos (templates) que LE ENVIAMOS');
+    expect(params?.system).toContain('Recordatorio de un turno próximo');
+  });
 });

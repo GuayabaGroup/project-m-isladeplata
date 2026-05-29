@@ -157,6 +157,23 @@ export const envSchema = z
     TAKEOVER_TTL_SECONDS: z.coerce.number().int().positive().default(21_600), // 6h
 
     /**
+     * Contexto de templates proactivos (recordatorios, confirmaciones) en el
+     * supervisor. `TEMPLATE_CONTEXT_ENABLED` (default `true`) hace que el
+     * pre-grafo traiga de Guacuco (`/template-send-log/recent`) los últimos
+     * templates enviados al usuario y los inyecte en el prompt del clasificador
+     * + social responder, para interpretar respuestas de texto libre
+     * relacionadas al último template ("sí", "no puedo ese día"). Solo se trae
+     * en invoke fresh (sin interrupt pendiente). `WINDOW_HOURS` y `LIMIT` acotan
+     * la búsqueda (Guacuco valida 1..168 / 1..50).
+     */
+    TEMPLATE_CONTEXT_ENABLED: z
+      .union([z.literal('true'), z.literal('false'), z.literal('').transform(() => 'true')])
+      .default('true')
+      .transform((v) => v === 'true'),
+    TEMPLATE_CONTEXT_WINDOW_HOURS: z.coerce.number().int().positive().max(168).default(48),
+    TEMPLATE_CONTEXT_LIMIT: z.coerce.number().int().positive().max(50).default(5),
+
+    /**
      * Dev-only: si `true`, el webhook de WhatsApp NO valida HMAC. Permite
      * trabajar localmente sin configurar `APP_SECRET_BY_PLATFORM_JSON`. El
      * `phone_number_id` sigue siendo obligatorio (debe existir en

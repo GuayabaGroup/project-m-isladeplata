@@ -3,6 +3,7 @@ import { SUPERVISOR_CONFIG } from '../../config/llm.config.js';
 import { parseLlmJson } from '../../core/parseLlmJson.js';
 import type { LlmProvider } from '../../infrastructure/llm/LlmProvider.js';
 import { sanitizeUserInput } from '../../security/sanitize.js';
+import { renderRecentTemplatesContext } from '../nodes/renderRecentTemplates.js';
 import type { GraphState, GraphStateUpdate, Intent, MessageType } from '../state.js';
 
 /**
@@ -120,8 +121,15 @@ export function makeClassifyIntentNode(deps: ClassifyDeps) {
       };
     }
 
-    const systemPrompt =
+    const baseSystemPrompt =
       state.identity?.profileType === 'staff' ? staffSystemPrompt : clientSystemPrompt;
+    // Contexto del último template enviado (recordatorio, confirmación…): permite
+    // clasificar respuestas de texto libre que de otro modo llegarían sin
+    // contexto (ej. "sí" tras un recordatorio → action:confirm). Vacío → no anexa.
+    const templateContext = renderRecentTemplatesContext(state.recentTemplates ?? []);
+    const systemPrompt = templateContext
+      ? `${baseSystemPrompt}\n\n${templateContext}`
+      : baseSystemPrompt;
     const response = await llm.complete({
       ...SUPERVISOR_CONFIG,
       system: systemPrompt,

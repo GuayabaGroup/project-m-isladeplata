@@ -17,6 +17,7 @@ import {
 } from '../core/types/CrmContext.js';
 import type { Identity } from '../core/types/Identity.js';
 import type { Outcome } from '../core/types/Outcome.js';
+import type { RecentTemplate } from '../core/types/RecentTemplate.js';
 import type { CompiledGraph } from '../graph/compile.js';
 import type { ResumePayload } from '../graph/subgraphs/schedule/nodes/askSlot.js';
 import {
@@ -309,6 +310,15 @@ export class Pipeline implements MessageProcessor {
     // Si no hay interrupt, invoke fresh con el state completo.
     const pendingInterrupts = await this.detectPendingInterrupts(thread.threadId);
 
+    // 7.2 Contexto de templates proactivos (recordatorios, confirmaciones).
+    // Solo en invoke fresh: si hay un subgrafo pausado en un interrupt ya tiene
+    // su propio contexto, y ahí está el roundtrip extra sin valor. Da al
+    // supervisor visibilidad del último template para interpretar respuestas de
+    // texto libre. Fail-open (Guacuco caído → []), filtrado por platformId.
+    const recentTemplates = pendingInterrupts
+      ? []
+      : await this.fetchRecentTemplates(message, internalIdentity);
+
     const graphResult = await Sentry.startSpan(
       {
         name: 'pipeline.graph.invoke',
@@ -338,6 +348,7 @@ export class Pipeline implements MessageProcessor {
             identity: internalIdentity,
             crmContext,
             catalog,
+            recentTemplates,
           },
           { configurable: { thread_id: thread.threadId } },
         );
@@ -382,6 +393,39 @@ export class Pipeline implements MessageProcessor {
         : {}),
     });
     return outcome;
+  }
+
+  /**
+   * Trae los templates proactivos enviados al usuario (Guacuco
+   * `/template-send-log/recent`) para dar contexto al supervisor. Fail-open:
+   * cualquier fallo retorna `[]` (la feature es aditiva, NUNCA bloquea el turno).
+   *
+   * Scoping cross-platform: el mismo teléfono puede recibir templates de varias
+   * plataformas (Divapp/Groomia/Allia). Descartamos los de OTRA plataforma
+   * comparando `metadata.platform_id` contra `identity.platformId`. Si el log no
+   * trae `platform_id` (`null`), lo conservamos (no podemos descartarlo con
+   * certeza) — fail-open hacia incluir.
+   */
+  private async fetchRecentTemplates(
+    message: ChannelMessage,
+    identity: Identity,
+  ): Promise<RecentTemplate[]> {
+    if (!env.TEMPLATE_CONTEXT_ENABLED) return [];
+    try {
+      const templates = await this.guacuco.getRecentTemplates({
+        recipientPhone: message.channelId,
+        windowHours: env.TEMPLATE_CONTEXT_WINDOW_HOURS,
+        limit: env.TEMPLATE_CONTEXT_LIMIT,
+        status: 'sent',
+      });
+      return templates.filter((t) => t.platformId == null || t.platformId === identity.platformId);
+    } catch (err) {
+      this.logger.warn('fetchRecentTemplates failed (continuing without template context)', {
+        error: err instanceof Error ? err.message : String(err),
+        platformId: identity.platformId,
+      });
+      return [];
+    }
   }
 
   private async detectPendingInterrupts(threadId: string): Promise<boolean> {

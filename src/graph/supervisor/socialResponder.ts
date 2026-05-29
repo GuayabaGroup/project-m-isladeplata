@@ -5,6 +5,7 @@ import type { TakeoverReasonCode } from '../../core/enums/TakeoverReason.js';
 import type { Outcome } from '../../core/types/Outcome.js';
 import type { LlmProvider } from '../../infrastructure/llm/LlmProvider.js';
 import { sanitizeUserInput } from '../../security/sanitize.js';
+import { renderRecentTemplatesContext } from '../nodes/renderRecentTemplates.js';
 import type { GraphState, GraphStateUpdate, MessageType } from '../state.js';
 
 /**
@@ -60,7 +61,8 @@ export function makeSocialResponderNode(deps: SocialDeps) {
     const persona = state.identity
       ? buildPersona(toPersonaContext(state.identity), { aiIdentityDisclosure: true })
       : '';
-    const system = buildSystemPrompt(messageType, persona);
+    const templateContext = renderRecentTemplatesContext(state.recentTemplates ?? []);
+    const system = buildSystemPrompt(messageType, persona, templateContext);
     const userTurn = text.length > 0 ? text : '[mensaje vacío]';
 
     const response = await llm.complete({
@@ -103,10 +105,15 @@ const TASK_BY_TYPE: Record<MessageType, string> = {
     'El usuario pide hablar con una persona. Avisale que lo derivás a alguien del equipo. Máximo 2 oraciones.',
 };
 
-function buildSystemPrompt(messageType: MessageType, persona: string): string {
+function buildSystemPrompt(
+  messageType: MessageType,
+  persona: string,
+  templateContext = '',
+): string {
   const task = TASK_BY_TYPE[messageType] ?? TASK_BY_TYPE.oos;
   const fallbackIntro =
     'Sos el asistente virtual de atención al cliente del negocio. Respondé amable y conciso, en español.';
   const preamble = persona.length > 0 ? persona : fallbackIntro;
-  return `${preamble}\n\n${task}`;
+  const templateBlock = templateContext.length > 0 ? `\n\n${templateContext}` : '';
+  return `${preamble}\n\n${task}${templateBlock}`;
 }

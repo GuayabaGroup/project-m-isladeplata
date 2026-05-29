@@ -4,9 +4,9 @@ import type { GuacucoClient } from '../../../../../src/clients/GuacucoClient.js'
 import type { ChannelMessage } from '../../../../../src/core/types/ChannelMessage.js';
 import { EMPTY_CRM_CONTEXT } from '../../../../../src/core/types/CrmContext.js';
 import type { Identity } from '../../../../../src/core/types/Identity.js';
-import type { LlmProvider } from '../../../../../src/infrastructure/llm/LlmProvider.js';
 import type { GraphState } from '../../../../../src/graph/state.js';
 import { retrieveManzanilloUrl } from '../../../../../src/graph/tools/system/retrieveManzanilloUrl.js';
+import type { LlmProvider } from '../../../../../src/infrastructure/llm/LlmProvider.js';
 
 const mockLogger = {
   warn: vi.fn(),
