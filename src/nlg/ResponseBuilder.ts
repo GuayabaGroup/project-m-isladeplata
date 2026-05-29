@@ -1,7 +1,7 @@
 import type { Logger } from 'winston';
-import type { WhatsAppOutboundMessage } from '../channels/whatsapp/types.js';
 import { CHANNEL_FORMATS, truncate } from '../config/channel-formats.config.js';
 import type { OutboundReply } from '../core/types/Outcome.js';
+import type { WhatsAppOutboundMessage } from '../core/types/WhatsAppOutbound.js';
 
 /**
  * Formats an `OutboundReply` (the abstract reply shape produced by the

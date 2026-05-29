@@ -261,7 +261,10 @@ describe('compileGraph (supervisor wiring)', () => {
       { configurable: { thread_id: 'th-button' } },
     );
 
-    expect(result.outcome?.action).toBe('handed_off');
+    // Botón stale/huérfano (confirm:<uuid> sin subgrafo activo): NO escala a
+    // humano — responde invitando a reformular y resetea el contador de fallas.
+    expect(result.outcome?.action).toBe('response');
+    expect(result.outcome?.pendingReply?.text).toMatch(/ya no está disponible/i);
     expect(create).not.toHaveBeenCalled(); // bypassed LLM entirely
   });
 

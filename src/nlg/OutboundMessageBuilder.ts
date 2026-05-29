@@ -1,10 +1,10 @@
-import type {
-  WhatsAppOutboundMessage,
-  WhatsAppTemplateComponent,
-} from '../channels/whatsapp/types.js';
 import { IdpError } from '../core/errors/IdpError.js';
 import type { OutboundMessageDto, OutboundTemplateDto } from '../core/types/OutboundMessage.js';
 import type { OutboundReply } from '../core/types/Outcome.js';
+import type {
+  WhatsAppOutboundMessage,
+  WhatsAppTemplateComponent,
+} from '../core/types/WhatsAppOutbound.js';
 import type { ResponseBuilder } from './ResponseBuilder.js';
 
 /**

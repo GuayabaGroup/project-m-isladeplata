@@ -105,11 +105,11 @@ export interface CompileGraphDeps {
  * Wiring:
  * ```
  *   START → supervisor_entry → [button shortcut?]
- *     ├── yes → subgraph_placeholder → END   (button sin subgrafo activo)
+ *     ├── yes → subgraph_placeholder → END   (button stale/huérfano sin subgrafo activo)
  *     └── no  → classify_intent → router →
  *                 ├── social_responder        → END
  *                 ├── tool_<name>             → END
- *                 ├── subgraph_placeholder    → END   (intent no implementado)
+ *                 ├── subgraph_placeholder    → END   (defensa: intent allowed sin dispatch)
  *                 └── schedule_dispatch       → ...   (intent='schedule', H4)
  *
  *   Sub-flujo schedule (todos los nodos viven en el parent):
@@ -568,23 +568,25 @@ function routeFromSupervisorWithSubgraphs(state: GraphState) {
   return base;
 }
 
-function subgraphPlaceholderNode(state: GraphState): GraphStateUpdate {
-  const subgraphName = inferSubgraphName(state);
+/**
+ * Nodo de fallback. Hoy (H4-H9 completos) NO representa "feature no
+ * implementada" — todos los subgrafos existen. Se alcanza en la práctica por
+ * **un tap de botón stale/huérfano sin subgrafo activo** que lo reciba
+ * (`supervisorEntryRouter` con `buttonShortcut` y sin `activeSubgraph`), y como
+ * defensa ante un intent allowed que no tenga dispatch mapeado.
+ *
+ * Por eso: `action: 'response'` (NO `handed_off` — un botón viejo no debe
+ * escalar a un humano ni contar como falla del bot en `TakeoverStore`) y un
+ * mensaje que invita a reformular en vez de prometer contacto humano.
+ */
+function subgraphPlaceholderNode(): GraphStateUpdate {
   const outcome: Outcome = {
-    action: 'handed_off',
+    action: 'response',
     pendingReply: {
-      text: `La funcionalidad de "${subgraphName}" todavía no está disponible. Un humano te va a contactar a la brevedad.`,
+      text: 'Esa opción ya no está disponible. Contame qué necesitás y te ayudo. 🙂',
     },
   };
   return { outcome };
-}
-
-function inferSubgraphName(state: GraphState): string {
-  const routing = state.routing ?? {};
-  if (routing.buttonShortcut) return routing.buttonShortcut.kind;
-  if (routing.messageType === 'query') return 'consulta';
-  if (routing.intent && routing.intent !== 'unknown') return routing.intent;
-  return 'esa acción';
 }
 
 // ============================================================================
