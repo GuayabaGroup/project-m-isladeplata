@@ -15,6 +15,8 @@ import { maskPII } from '../security/maskPII.js';
  */
 const SUMMARY_BY_REASON: Readonly<Record<TakeoverReasonCode, string>> = {
   explicit_request: 'El cliente pidió explícitamente hablar con una persona.',
+  subgraph_handoff:
+    'El bot no pudo completar la acción solicitada y derivó la conversación a una persona.',
   repeated_failures: 'El bot no logró resolver la conversación tras varios intentos.',
   sentiment_frustration: 'El cliente muestra señales de frustración o queja repetida.',
   other: 'La conversación requiere intervención humana.',
@@ -22,9 +24,9 @@ const SUMMARY_BY_REASON: Readonly<Record<TakeoverReasonCode, string>> = {
 
 /**
  * Dispara el takeover humano fire-and-forget (análogo a `ConversationPersister`):
- * `POST /conversations/takeover` + espejo `mirrorActive` en Redis. NUNCA throws —
- * el takeover es un cambio de estado operativo, no parte del flujo conversacional
- * (§spec "Por qué fire-and-forget y no una tool del grafo").
+ * `GuacucoClient.triggerTakeover` (→ `PATCH support-mode`) + espejo `mirrorActive`
+ * en Redis. NUNCA throws — el takeover es un cambio de estado operativo, no parte
+ * del flujo conversacional (§spec "Por qué fire-and-forget y no una tool del grafo").
  *
  * Reglas:
  * - El espejo Redis SOLO se setea si el POST resolvió: si Guacuco está caído, el

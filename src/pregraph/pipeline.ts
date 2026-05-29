@@ -466,10 +466,19 @@ export class Pipeline implements MessageProcessor {
   }
 
   /**
-   * Post-turno: dispara el takeover (capas A/C vía `outcome.takeover`, capa B vía
-   * contador de fallas consecutivas) o resetea el contador en un outcome
-   * exitoso. Fire-and-forget: corre dentro de `swallowAsync` y el notifier nunca
-   * lanza, así que nunca bloquea el turno.
+   * Post-turno: dispara el takeover o resetea el contador de fallas.
+   * Fire-and-forget: corre dentro de `swallowAsync` y el notifier nunca lanza,
+   * así que nunca bloquea el turno. Tres caminos:
+   *
+   * - **Capas A/C** (`outcome.takeover`): señal explícita con su `reasonCode`
+   *   (pedido explícito de humano, frustración, gap de contenido). Inmediato.
+   * - **`handed_off`**: un subgrafo abandonó (anti-loop, commit fallido, sin
+   *   disponibilidad) y le prometió al usuario contacto humano. Escalación
+   *   INMEDIATA (`subgraph_handoff`) — esperar al umbral dejaría la promesa sin
+   *   cumplir. No cuenta para el contador.
+   * - **`error`** (capa B): fallo técnico inesperado. Acumula; recién al
+   *   `TAKEOVER_FAILS_THRESHOLD`-ésimo consecutivo escala (`repeated_failures`),
+   *   para no silenciar por un glitch transitorio.
    */
   private async handleTakeoverAfterTurn(
     identity: Identity,
@@ -491,8 +500,22 @@ export class Pipeline implements MessageProcessor {
       return;
     }
 
-    // Capa B: N salidas handed_off/error consecutivas → takeover.
-    if (outcome.action === 'handed_off' || outcome.action === 'error') {
+    // Abandono de subgrafo: escalación inmediata para cumplir la promesa
+    // "un humano te va a contactar" que el outcome ya le mostró al usuario.
+    if (outcome.action === 'handed_off') {
+      await this.takeoverNotifier.trigger(
+        identity,
+        threadId,
+        message,
+        'subgraph_handoff',
+        subgraph,
+      );
+      await this.takeover.resetFailures(threadId);
+      return;
+    }
+
+    // Capa B: N salidas `error` inesperadas consecutivas → takeover.
+    if (outcome.action === 'error') {
       const fails = await this.takeover.bumpFailures(threadId);
       if (fails >= env.TAKEOVER_FAILS_THRESHOLD) {
         await this.takeoverNotifier.trigger(
@@ -504,7 +527,10 @@ export class Pipeline implements MessageProcessor {
         );
         await this.takeover.resetFailures(threadId);
       }
-    } else if (outcome.action === 'response' || outcome.action === 'awaiting_user') {
+      return;
+    }
+
+    if (outcome.action === 'response' || outcome.action === 'awaiting_user') {
       // Outcome exitoso → resetea el contador de fallas.
       await this.takeover.resetFailures(threadId);
     }

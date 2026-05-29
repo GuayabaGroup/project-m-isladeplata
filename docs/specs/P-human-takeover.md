@@ -14,10 +14,15 @@
 > context_code)`. Ese mismo endpoint cubre la **escalación** (alerta al staff por
 > WhatsApp), o sea fusiona P-human-takeover + P-escalation. `GuacucoClient.triggerTakeover`
 > ya traduce el contrato interno del agente a ese PATCH (vía `RetryClient.patch`).
-> Pendiente: la **reactivación explícita desde el dashboard** (volver a dar control
-> al bot) ya existe como `support_mode=false` con `activated_by='staff'` — falta
-> que el dashboard lo invoque. El TTL de seguridad lo aplica el agente vía Redis
-> (`TakeoverStore`), no Guacuco.
+>
+> **Loop cerrado (2026-05-29)**: Guacuco ahora emite `human_controlled:{active,
+> expires_at}` en `identity/resolve` (derivado de `support_mode` de la conversación;
+> `expires_at=null` — Guacuco no aplica TTL). El pre-grafo del agente
+> (`syncTakeoverMirror`) repuebla/invalida su espejo Redis con ese campo cada turno
+> → la **reactivación desde el dashboard** (`support_mode=false`, `activated_by='staff'`)
+> des-silencia el bot al instante, sin esperar el TTL de Redis. Guacuco es la fuente
+> de verdad; Redis es caché rápido. Falta solo que el dashboard exponga el botón de
+> reactivación.
 
 ---
 

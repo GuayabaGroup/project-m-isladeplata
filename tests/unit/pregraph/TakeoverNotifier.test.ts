@@ -151,4 +151,19 @@ describe('TakeoverNotifier.buildPayload', () => {
     // idempotency_key prefijado con el thread_id.
     expect(payload.idempotency_key.startsWith(`${THREAD}:`)).toBe(true);
   });
+
+  it('uses a deterministic summary for subgraph_handoff', () => {
+    const { notifier } = makeNotifier();
+    const payload = notifier.buildPayload(
+      IDENTITY,
+      THREAD,
+      makeMessage('no pude reagendar'),
+      'subgraph_handoff',
+      'reschedule',
+    );
+
+    expect(payload.reason_code).toBe('subgraph_handoff');
+    expect(payload.summary).toContain('no pudo completar');
+    expect(payload.subgraph).toBe('reschedule');
+  });
 });

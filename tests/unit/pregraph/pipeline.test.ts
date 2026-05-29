@@ -843,11 +843,11 @@ describe('Pipeline takeover (P-human-takeover)', () => {
     );
   });
 
-  it('layer B: does NOT trigger below the threshold', async () => {
+  it('layer B: does NOT trigger on a single error below the threshold', async () => {
     const { deps, mocks } = makeDeps();
     mocks.guacuco.resolveIdentity.mockResolvedValue(fullIdentity());
     mocks.graph.invoke.mockResolvedValue({
-      outcome: { action: 'handed_off', pendingReply: { text: 'no disponible' } },
+      outcome: { action: 'error', pendingReply: { text: 'Ups' } },
     });
     mocks.takeover.bumpFailures.mockResolvedValue(1);
     const pipeline = new Pipeline(deps);
@@ -856,6 +856,28 @@ describe('Pipeline takeover (P-human-takeover)', () => {
     await flush();
 
     expect(mocks.takeoverNotifier.trigger).not.toHaveBeenCalled();
+  });
+
+  it('handed_off: escalates immediately (subgraph_handoff), no counter wait', async () => {
+    const { deps, mocks } = makeDeps();
+    mocks.guacuco.resolveIdentity.mockResolvedValue(fullIdentity());
+    mocks.graph.invoke.mockResolvedValue({
+      outcome: { action: 'handed_off', pendingReply: { text: 'Un humano te va a contactar.' } },
+    });
+    const pipeline = new Pipeline(deps);
+
+    await pipeline.process(makeMessage());
+    await flush();
+
+    expect(mocks.takeoverNotifier.trigger).toHaveBeenCalledWith(
+      expect.anything(),
+      'biz-1:cli-1:whatsapp:1',
+      expect.anything(),
+      'subgraph_handoff',
+      null,
+    );
+    // No cuenta como falla acumulable del bot.
+    expect(mocks.takeover.bumpFailures).not.toHaveBeenCalled();
   });
 
   it('layer B: resets the failure counter on a successful outcome', async () => {

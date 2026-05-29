@@ -11,11 +11,15 @@
 > implementó**. La necesidad (silenciar + notificar al negocio) ya la cubre
 > `PATCH /api/v1/short-term-memory/conversations/support-mode` con `notify_support=true`
 > (ver [P-human-takeover](./P-human-takeover.md)), que alerta al staff por WhatsApp.
-> Decisión pendiente: ¿basta con reusar support-mode para los `handed_off` de
-> subgrafo, o se quiere una cola de tickets `open/closed` separada en el dashboard?
-> Por ahora un `handed_off` puede disparar `triggerTakeover` (support-mode) en vez
-> de dejar la promesa sin cumplir. El resto de esta spec queda como diseño de la
-> cola dedicada por si se decide construirla.
+> **Resuelto (2026-05-29)**: todo `handed_off` de subgrafo ahora dispara
+> `triggerTakeover` (→ support-mode con `notify_support=true`) **de inmediato**,
+> con `reason_code='subgraph_handoff'` — el pipeline (`handleTakeoverAfterTurn`)
+> lo escala sin esperar al umbral, así la promesa "un humano te va a contactar"
+> se cumple siempre. Los `error` técnicos siguen acumulando hasta
+> `TAKEOVER_FAILS_THRESHOLD` (`repeated_failures`). Nota: con el contrato actual,
+> notificar implica silenciar el bot (support_mode=true). El resto de esta spec
+> queda como diseño de una cola de tickets `open/closed` dedicada, por si se
+> decide separar "notificar" de "silenciar" en el futuro.
 
 ---
 
