@@ -512,6 +512,9 @@ function toInternalIdentityOrNull(
     ...(identity.businessStaffRoles?.business_country_code
       ? { countryCode: identity.businessStaffRoles.business_country_code }
       : {}),
+    ...(identity.businessStaffRoles?.general_comments
+      ? { businessGeneralComments: identity.businessStaffRoles.general_comments }
+      : {}),
   };
 }
 

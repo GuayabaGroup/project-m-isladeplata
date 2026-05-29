@@ -18,6 +18,7 @@ import type {
 import type { CrmContext } from '../../../../src/core/types/CrmContext.js';
 import type { Identity } from '../../../../src/core/types/Identity.js';
 import { compileGraph } from '../../../../src/graph/compile.js';
+import type { PlatformContentLoader } from '../../../../src/infrastructure/content/PlatformContentLoader.js';
 import {
   type AnthropicMessagesLike,
   AnthropicProvider,
@@ -527,5 +528,71 @@ describe('query E2E #10: freeform_sql Guacuco execute throw → retry → fail �
     expect(calls.execute).toHaveBeenCalledTimes(2);
     expect(result.outcome?.action).toBe('response');
     expect(result.outcome?.pendingReply?.text).toMatch(/no pudo ejecutarse|probá de nuevo/i);
+  });
+});
+
+// ============================================================================
+// #11 + #12: platform content (Nivel B, H9.2) — staff, role-aware classifier
+// ============================================================================
+
+describe('query E2E #11: platform_commercial (staff, con contenido)', () => {
+  it('staff pregunta por la plataforma → fetch markdown → synthesize', async () => {
+    const llm = makeSeqLlm([
+      // global classifier (staff hint → query)
+      '{"messageType":"query","confidence":0.95}',
+      // query.classifyQuery (staff prompt)
+      '{"intent":"platform_commercial","confidence":0.9}',
+      // synthesize desde el content
+      'El plan Pro de la plataforma cuesta $10 por mes.',
+    ]);
+    const { guacuco } = makeGuacuco({});
+    const platformContent = {
+      get: (kind: string, platformId: number) =>
+        kind === 'commercial' && platformId === 1 ? '# Allia\nPlan Pro: $10/mes.' : undefined,
+    } as unknown as PlatformContentLoader;
+
+    const graph = compileGraph({
+      checkpointer: new MemorySaver(),
+      logger: mockLogger,
+      llm,
+      guacuco,
+      platformContent,
+    });
+    const result = await graph.invoke(
+      freshInvoke(makeMessage('cuánto cuesta la plataforma'), IDENTITY_STAFF, CRM_EMPTY),
+      { configurable: { thread_id: 'q-11' } },
+    );
+    expect(result.outcome?.action).toBe('response');
+    expect(result.outcome?.pendingReply?.text).toMatch(/\$10|plan pro/i);
+  });
+});
+
+describe('query E2E #12: platform_onboarding (staff, sin contenido → escala)', () => {
+  it('staff pregunta setup sin markdown → handed_off + takeover', async () => {
+    const llm = makeSeqLlm([
+      '{"messageType":"query","confidence":0.95}',
+      '{"intent":"platform_onboarding","confidence":0.9}',
+      // No debería llegar a synthesize (fetch escala antes), pero por las dudas.
+      'no usado',
+    ]);
+    const { guacuco } = makeGuacuco({});
+    const platformContent = {
+      get: () => undefined,
+    } as unknown as PlatformContentLoader;
+
+    const graph = compileGraph({
+      checkpointer: new MemorySaver(),
+      logger: mockLogger,
+      llm,
+      guacuco,
+      platformContent,
+    });
+    const result = await graph.invoke(
+      freshInvoke(makeMessage('cómo configuro mis horarios'), IDENTITY_STAFF, CRM_EMPTY),
+      { configurable: { thread_id: 'q-12' } },
+    );
+    expect(result.outcome?.action).toBe('handed_off');
+    expect(result.outcome?.takeover?.reasonCode).toBe('other');
+    expect(result.outcome?.pendingReply?.text).toMatch(/soporte/i);
   });
 });

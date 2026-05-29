@@ -42,7 +42,18 @@ Reglas:
 - NO menciones la palabra "JSON" ni "data" en tu respuesta.`;
 
 const CANNOT_ANSWER_TASK =
-  'El usuario hizo una pregunta que no podés responder con los datos disponibles. Devolvé UN mensaje corto (máx 2 oraciones) explicando amablemente que no podés ayudar con eso pero que podés con precios, servicios o sus turnos próximos.';
+  'El usuario hizo una pregunta que no podés responder con los datos disponibles. PRIMERO: si el bloque <business_policies_and_notes> la responde (ej. medios de pago, cancelaciones, requisitos), contestá desde ahí — esa política es fuente autoritativa. Si no aplica, devolvé UN mensaje corto (máx 2 oraciones) explicando amablemente que no podés ayudar con eso pero que sí con precios, servicios o sus turnos próximos.';
+
+// Nivel B (H9.2): el staff pregunta por la plataforma. El JSON trae
+// { kind, content } con el markdown oficial. Anti-alucinación estricta.
+const PLATFORM_INFO_TASK = `El usuario (staff del negocio) preguntó sobre la PLATAFORMA. Te paso el contenido oficial (markdown, en el campo "content") y la pregunta original.
+
+Reglas:
+- Respondé SOLO desde el contenido oficial provisto. Es la única fuente autoritativa.
+- NO inventes pasos, menús, botones, precios, planes, features ni URLs que no estén en el contenido.
+- Si el contenido NO cubre lo que se pregunta, decilo y sugerí contactar al equipo de soporte/comercial. No completes con suposiciones.
+- Estilo WhatsApp, conciso. Usá viñetas para listas de pasos o planes.
+- NO menciones la palabra "JSON", "markdown", "content" ni "data" en tu respuesta.`;
 
 const CANNOT_ANSWER_FALLBACK =
   'No estoy seguro de poder responder eso. Si querés, podés preguntarme por precios, servicios o tus próximos turnos.';
@@ -62,7 +73,10 @@ export function makeSynthesizeResponseNode(deps: SynthesizeResponseDeps) {
     const persona = state.identity
       ? buildPersona(toPersonaContext(state.identity), { aiIdentityDisclosure: true })
       : '';
-    const synthSystem = persona ? `${persona}\n\n${SYNTH_TASK}` : SYNTH_TASK;
+    const isPlatformInfo =
+      current.intent === 'platform_commercial' || current.intent === 'platform_onboarding';
+    const task = isPlatformInfo ? PLATFORM_INFO_TASK : SYNTH_TASK;
+    const synthSystem = persona ? `${persona}\n\n${task}` : task;
 
     // Branch 1: cannot_answer (classifier no encontró intent válido).
     if (current.intent === 'cannot_answer') {

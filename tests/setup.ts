@@ -79,3 +79,7 @@ process.env.METRICS_API_KEY = process.env.METRICS_API_KEY ?? '';
 
 // Outbound S2S — IDP_API_KEY es required (min 16 chars) en env.ts.
 process.env.IDP_API_KEY = process.env.IDP_API_KEY ?? 'test-idp-api-key-1234567890';
+
+// Contenido de plataforma (Nivel B, H9.2). Tiene default en env.ts; los tests
+// del loader pasan su propio baseDir, así que esto solo fija un valor estable.
+process.env.CONTENT_DIR = process.env.CONTENT_DIR ?? './content';

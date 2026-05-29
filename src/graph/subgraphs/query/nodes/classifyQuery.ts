@@ -31,7 +31,16 @@ const VALID_INTENTS: ReadonlySet<QueryIntent> = new Set<QueryIntent>([
   'my_upcoming',
   'staff_schedule_day',
   'freeform_sql',
+  'platform_commercial',
+  'platform_onboarding',
   'cannot_answer',
+]);
+
+/** Intents staff-only (Nivel B). Un client que los pida se rebaja a cannot_answer. */
+const STAFF_ONLY_INTENTS: ReadonlySet<QueryIntent> = new Set<QueryIntent>([
+  'staff_schedule_day',
+  'platform_commercial',
+  'platform_onboarding',
 ]);
 
 const FAIL_OPEN: ClassifyOutput = { intent: 'cannot_answer', confidence: 0.3 };
@@ -59,7 +68,9 @@ intent es uno de:
 - "my_upcoming" — sus turnos propios próximos (como cliente)
 - "staff_schedule_day" — agenda de trabajo del staff de HOY ("qué tengo hoy", "agenda")
 - "freeform_sql" — pregunta sobre datos del negocio que NO cabe en los anteriores pero PODRÍA contestarse con SQL. Ejemplos: "cuánto facturé el mes pasado", "qué clientes vinieron 3 veces este año", "cuántos turnos cancelados hubo en marzo", "qué servicio se pidió más esta semana". Si la pregunta es ambigua o off-topic, NO uses freeform_sql — usá cannot_answer.
-- "cannot_answer" — off-topic, demasiado vaga, o no es sobre datos del negocio.
+- "platform_commercial" — pregunta COMERCIAL sobre la PLATAFORMA en sí (el producto/chatbot, no el negocio del staff): su precio, planes, tarifas, qué incluye, descuentos, para quién es, cómo contratarla, con quién hablar para contratar, qué es. Ejemplos: "cuánto cuesta la plataforma", "qué planes hay", "qué incluye", "con quién hablo para contratar", "qué es esto". NO confundir con precios de los SERVICIOS del negocio (eso es service_prices).
+- "platform_onboarding" — pregunta de SETUP/CÓMO-USAR la PLATAFORMA: configurar el negocio, subir servicios, cargar el equipo/staff, conectar WhatsApp, configurar horarios/disponibilidad, compartir la URL de reservas, cómo agendan los clientes, primeros pasos. Ejemplos: "cómo configuro mis horarios", "cómo subo mis servicios", "cómo le paso el link a mis clientes", "cómo conecto WhatsApp", "primeros pasos".
+- "cannot_answer" — off-topic, demasiado vaga, o no es sobre datos del negocio ni sobre la plataforma.
 
 confidence: número entre 0 y 1.
 Respondé SOLO el JSON, sin prosa ni markdown.`;
@@ -115,8 +126,10 @@ function normalize(raw: Partial<ClassifyOutput> | null, profileType: string): Cl
       ? (raw.intent as QueryIntent)
       : FAIL_OPEN.intent;
 
-  // Defensa-en-profundidad: si client pide staff_schedule_day → cannot_answer.
-  if (intent === 'staff_schedule_day' && profileType !== 'staff') {
+  // Defensa-en-profundidad: si un client pide un intent staff-only
+  // (staff_schedule_day, platform_commercial, platform_onboarding) → cannot_answer.
+  // El prompt client no los menciona, pero el LLM podría emitirlos igual.
+  if (STAFF_ONLY_INTENTS.has(intent) && profileType !== 'staff') {
     intent = 'cannot_answer';
   }
 

@@ -133,6 +133,15 @@ export const envSchema = z
     IDP_API_KEY: z.string().min(16),
 
     /**
+     * Directorio base del contenido de plataforma (Nivel B, H9.2): markdown
+     * comercial/onboarding por plataforma en `<CONTENT_DIR>/{commercial,
+     * onboarding}/{allia,groomia,divapp}.md`. Cargado UNA vez al boot por
+     * `PlatformContentLoader` (cache en memoria, sin hot-reload). Archivos
+     * ausentes/vacíos → el subgrafo query escala a soporte determinísticamente.
+     */
+    CONTENT_DIR: z.string().default('./content'),
+
+    /**
      * Takeover humano manual (spec P-human-takeover). `HUMAN_TAKEOVER_ENABLED`
      * (default `false` hasta que Guacuco despliegue el endpoint/flag) habilita:
      * detección capas A/B, gate en el pre-grafo y disparo fire-and-forget.

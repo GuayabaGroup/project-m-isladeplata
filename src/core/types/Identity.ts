@@ -25,4 +25,11 @@ export interface Identity {
    * acento/dialecto del español en las respuestas (voseo/tuteo, vocabulario
    * regional). `null`/ausente → español latinoamericano neutro. */
   countryCode?: string | null;
+  /** Notas y políticas operativas del negocio
+   * (`businessStaffRoles.general_comments`, editable a mano vía SQL en la
+   * columna `businesses.general_comments`). Contexto AUTORITATIVO inyectado por
+   * la capa de personalidad como bloque `<business_policies_and_notes>` para
+   * client y staff: medios de pago aceptados, condiciones de cancelación,
+   * requisitos de confirmación, etc. `null`/ausente → bloque omitido. */
+  businessGeneralComments?: string | null;
 }

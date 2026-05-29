@@ -94,7 +94,7 @@ const TASK_BY_TYPE: Record<MessageType, string> = {
     'El usuario te saluda — devolvé un saludo cálido y ofrecé ayudar con turnos o consultas. Máximo 2 oraciones.',
   farewell:
     'El usuario se despide — saludalo y dejá la puerta abierta para volver. Máximo 2 oraciones.',
-  oos: 'El usuario habla de algo fuera de tu scope (turnos, consultas, reservas). Redirigílo gentilmente sin ser cortante. NO digas "no puedo ayudarte" sin ofrecer alternativa. Máximo 2 oraciones.',
+  oos: 'El usuario habla de algo aparentemente fuera de tu scope (turnos, consultas, reservas). PRIMERO: si el bloque <business_policies_and_notes> responde lo que pregunta (ej. medios de pago, cancelaciones, requisitos), contestá desde ahí — esa política redefine tu scope, NO la trates como fuera de tema. Si no aplica, redirigílo gentilmente sin ser cortante, NUNCA digas "no puedo ayudarte" sin ofrecer alternativa. Máximo 2 oraciones.',
   action:
     'No quedó claro qué pide el usuario. Pedile que reformule, ofreciendo ayudar con turnos o consultas. Máximo 2 oraciones.',
   query:

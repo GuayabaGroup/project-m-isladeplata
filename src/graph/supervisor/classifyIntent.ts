@@ -73,16 +73,30 @@ confidence: número entre 0 y 1.
 
 Respondé SOLO el JSON, sin prosa ni markdown.`;
 
-function buildSystemPrompt(humanRequestEnabled: boolean): string {
+// Nivel B (H9.2): cuando el usuario es STAFF, las preguntas sobre la PLATAFORMA
+// (producto/precio) y sobre cómo CONFIGURARLA/usarla son consultas informativas
+// → "query" (no "oos" ni "action"). Sin esto, "¿cómo configuro mis horarios?"
+// caería en oos/action y nunca llegaría al subgrafo query (donde viven los
+// intents platform_commercial/platform_onboarding). Solo se anexa para staff.
+const STAFF_QUERY_HINT = `
+El usuario es STAFF del negocio. Clasificá también como "query":
+- preguntas sobre la PLATAFORMA/producto en sí: qué es, precio, planes, qué incluye, cómo contratarla
+- preguntas de cómo CONFIGURAR o USAR la plataforma: subir servicios, cargar al equipo, conectar WhatsApp, configurar horarios/disponibilidad, compartir el link de reservas, primeros pasos
+Estas NO son "oos" ni "action": son informativas → "query".`;
+
+function buildSystemPrompt(humanRequestEnabled: boolean, staff: boolean): string {
   const typeLines = humanRequestEnabled
     ? `${BASE_SYSTEM_PROMPT}\n${HUMAN_REQUEST_PROMPT_LINE}`
     : BASE_SYSTEM_PROMPT;
-  return `${typeLines}\n\n${PROMPT_TAIL}`;
+  const staffHint = staff ? `\n${STAFF_QUERY_HINT}` : '';
+  return `${typeLines}${staffHint}\n\n${PROMPT_TAIL}`;
 }
 
 export function makeClassifyIntentNode(deps: ClassifyDeps) {
   const { llm, logger, humanRequestEnabled = false, frustrationJudge } = deps;
-  const systemPrompt = buildSystemPrompt(humanRequestEnabled);
+  // Dos variantes precomputadas; se elige por rol en cada turno (Nivel B H9.2).
+  const clientSystemPrompt = buildSystemPrompt(humanRequestEnabled, false);
+  const staffSystemPrompt = buildSystemPrompt(humanRequestEnabled, true);
   const validTypes = new Set<MessageType>(
     humanRequestEnabled ? [...BASE_MESSAGE_TYPES, 'human_request'] : BASE_MESSAGE_TYPES,
   );
@@ -106,6 +120,8 @@ export function makeClassifyIntentNode(deps: ClassifyDeps) {
       };
     }
 
+    const systemPrompt =
+      state.identity?.profileType === 'staff' ? staffSystemPrompt : clientSystemPrompt;
     const response = await llm.complete({
       ...SUPERVISOR_CONFIG,
       system: systemPrompt,

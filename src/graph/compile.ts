@@ -12,6 +12,7 @@ import { env } from '../config/env.js';
 import { QUERY_JUDGE_CONFIG } from '../config/llm.config.js';
 import { IdpError } from '../core/errors/IdpError.js';
 import type { Outcome } from '../core/types/Outcome.js';
+import type { PlatformContentLoader } from '../infrastructure/content/PlatformContentLoader.js';
 import type { LlmProvider } from '../infrastructure/llm/LlmProvider.js';
 import { sanitizeUserInput } from '../security/sanitize.js';
 import { type GraphState, GraphStateAnnotation, type GraphStateUpdate } from './state.js';
@@ -91,6 +92,11 @@ export interface CompileGraphDeps {
   logger: Logger;
   llm: LlmProvider;
   guacuco: GuacucoClient;
+  /** Loader de contenido de plataforma (Nivel B, H9.2). Inyectado a `fetchIntent`
+   * para los intents `platform_commercial`/`platform_onboarding`. Opcional:
+   * undefined → `fetchIntent` trata todo como "sin contenido" y escala a soporte
+   * (default seguro; bootstrap siempre lo inyecta). */
+  platformContent?: PlatformContentLoader;
 }
 
 /**
@@ -127,7 +133,7 @@ export interface CompileGraphDeps {
  * ```
  */
 export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
-  const { checkpointer, logger, llm, guacuco } = deps;
+  const { checkpointer, logger, llm, guacuco, platformContent } = deps;
 
   const toolDeps: ToolDeps = { guacuco, logger, llm };
 
@@ -194,6 +200,7 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
     guacuco,
     llm,
     logger,
+    platformContent,
     ...(queryJudge ? { judge: queryJudge } : {}),
   });
   const querySynthesize = makeSynthesizeResponseNode({

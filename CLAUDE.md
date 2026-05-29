@@ -55,6 +55,9 @@ pnpm lint:fix          # biome check --write
 - **H8.2 — Métricas (prom-client + Sentry spans + /metrics endpoint)** ✅
 - **H8.3 — Cutover docs (`docs/RUNBOOK_CUTOVER.md`)** ✅ (scope reducido: cutover directo sin router dual ni rollout gradual)
 - H8.4 — primer mensaje real en producción + observación 24h
+- **H9 — Contenido de negocio (pull-forward de PENDING_ITER2)** — plan en [`docs/PLAN_H9_BUSINESS_CONTENT.md`](docs/PLAN_H9_BUSINESS_CONTENT.md)
+  - **H9.1 — Nivel A: políticas del negocio (`general_comments` → persona)** ✅
+  - **H9.2 — Nivel B: comercial/onboarding de plataforma (subgrafo query + content loader + escalación)** ✅
 
 Actualizar este checklist a medida que se completen hitos.
 

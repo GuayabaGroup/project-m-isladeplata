@@ -214,3 +214,36 @@ describe('classifyIntent node', () => {
     expect(update.routing?.messageType).toBe('greeting');
   });
 });
+
+describe('classifyIntent role-aware staff hint (Nivel B, H9.2)', () => {
+  function makeProviderWithSpy(): { llm: AnthropicProvider; create: ReturnType<typeof vi.fn> } {
+    const create = vi.fn(async () => makeStubMessage('{"messageType":"query","confidence":0.9}'));
+    const client: AnthropicMessagesLike = { create };
+    return {
+      llm: new AnthropicProvider({ apiKey: 'test-anthropic-key', logger: mockLogger, client }),
+      create,
+    };
+  }
+
+  function stateWithProfile(text: string, profileType: 'client' | 'staff'): GraphState {
+    const base = makeState(text);
+    return { ...base, identity: { ...IDENTITY, profileType } };
+  }
+
+  it('inyecta el hint de plataforma cuando el usuario es staff', async () => {
+    const { llm, create } = makeProviderWithSpy();
+    const node = makeClassifyIntentNode({ llm, logger: mockLogger });
+    await node(stateWithProfile('cómo configuro mis horarios', 'staff'));
+    const sys = (create.mock.calls[0]?.[0] as { system?: string }).system ?? '';
+    expect(sys).toMatch(/PLATAFORMA/);
+    expect(sys).toMatch(/CONFIGURAR/);
+  });
+
+  it('NO inyecta el hint cuando el usuario es client', async () => {
+    const { llm, create } = makeProviderWithSpy();
+    const node = makeClassifyIntentNode({ llm, logger: mockLogger });
+    await node(stateWithProfile('cómo configuro mis horarios', 'client'));
+    const sys = (create.mock.calls[0]?.[0] as { system?: string }).system ?? '';
+    expect(sys).not.toMatch(/El usuario es STAFF del negocio/);
+  });
+});

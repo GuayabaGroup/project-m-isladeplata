@@ -18,6 +18,13 @@ export type QueryIntent =
   | 'staff_schedule_day'
   /** Free-form text-to-SQL: LLM genera SQL → validate local → Guacuco execute. */
   | 'freeform_sql'
+  /** Staff-only (Nivel B, H9.2): pregunta comercial sobre la plataforma
+   * (precios, planes, qué es). Responde desde `content/commercial/*.md`. */
+  | 'platform_commercial'
+  /** Staff-only (Nivel B, H9.2): pregunta de onboarding/uso de la plataforma
+   * (setup, subir servicios, conectar WhatsApp). Responde desde
+   * `content/onboarding/*.md`. */
+  | 'platform_onboarding'
   | 'cannot_answer';
 
 export type QueryPhase = 'classifying' | 'fetching' | 'synthesizing' | 'done' | 'failed';

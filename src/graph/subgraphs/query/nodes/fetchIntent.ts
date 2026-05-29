@@ -11,6 +11,10 @@ import type { CatalogState } from '../../../../core/types/Catalog.js';
 import type { CrmContext } from '../../../../core/types/CrmContext.js';
 import type { Identity } from '../../../../core/types/Identity.js';
 import type { Outcome } from '../../../../core/types/Outcome.js';
+import type {
+  PlatformContentKind,
+  PlatformContentLoader,
+} from '../../../../infrastructure/content/PlatformContentLoader.js';
 import type { LlmProvider } from '../../../../infrastructure/llm/LlmProvider.js';
 import {
   type ConversationTurn,
@@ -41,6 +45,12 @@ export interface FetchIntentDeps {
   logger: Logger;
   /** QueryJudge para freeform_sql. Undefined → judge deshabilitado (skip). */
   judge?: QueryJudge;
+  /**
+   * Loader de contenido de plataforma (Nivel B, H9.2) para los intents
+   * `platform_commercial`/`platform_onboarding`. Undefined → se trata como
+   * "sin contenido" y se escala a soporte (defensivo; bootstrap siempre lo inyecta).
+   */
+  platformContent?: PlatformContentLoader;
 }
 
 const FORBIDDEN_OUTCOME: Outcome = {
@@ -56,6 +66,28 @@ const FETCH_ERROR_OUTCOME: Outcome = {
     text: 'No pude consultar esa información en este momento. Probá de nuevo en un minuto.',
   },
 };
+
+/**
+ * Escalación determinista de Nivel B (H9.2): un staff preguntó algo
+ * comercial/onboarding pero NO hay markdown cargado para su plataforma. En vez
+ * de dejar que el LLM invente pasos/precios/URLs, derivamos a un humano.
+ *
+ * `action: 'handed_off'` + `takeover` adjunto: si `HUMAN_TAKEOVER_ENABLED=true`,
+ * el pipeline dispara el `TakeoverNotifier` (escalación real, IDP-style). Si
+ * está apagado, el bloque de takeover del pipeline se saltea pero el usuario
+ * igual recibe el `pendingReply` canned — robusto a ambos estados (ver
+ * docs/PLAN_H9_BUSINESS_CONTENT.md §2).
+ */
+function platformEscalationOutcome(kind: PlatformContentKind): Outcome {
+  const topic = kind === 'commercial' ? 'comercial' : 'de configuración';
+  return {
+    action: 'handed_off',
+    pendingReply: {
+      text: `Para tu consulta ${topic} sobre la plataforma te derivo con el equipo de soporte: en breve te contactan por acá. 🙌`,
+    },
+    takeover: { reasonCode: 'other' },
+  };
+}
 
 // freeform SQL usa el supervisor model (Haiku) por simplicidad. Plan original
 // sugería Sonnet — si la calidad de SQL es baja en producción, promover a
@@ -78,7 +110,7 @@ interface SqlGenerationResult {
 }
 
 export function makeFetchIntentNode(deps: FetchIntentDeps) {
-  const { guacuco, llm, logger, judge } = deps;
+  const { guacuco, llm, logger, judge, platformContent } = deps;
   // Schema cache per (profileType:roleId) — singleton del closure del factory.
   const schemaCache = new Map<string, CachedSchema>();
 
@@ -153,6 +185,33 @@ export function makeFetchIntentNode(deps: FetchIntentDeps) {
           judge,
           history: buildConversationHistory(state.messages),
         });
+      }
+
+      case 'platform_commercial':
+      case 'platform_onboarding': {
+        const kind: PlatformContentKind =
+          intent === 'platform_commercial' ? 'commercial' : 'onboarding';
+
+        // Staff-only (defensa en profundidad; classify ya rebaja a client).
+        if (identity?.profileType !== 'staff') {
+          logger.warn('query.fetch: platform content requested by non-staff', {
+            kind,
+            profileType: identity?.profileType,
+          });
+          return { phase: 'failed', terminalOutcome: FORBIDDEN_OUTCOME };
+        }
+
+        const content = platformContent?.get(kind, identity.platformId)?.trim();
+        if (!content || content.length === 0) {
+          // Sin contenido → escalación determinista (no inventar).
+          logger.info('query.fetch: no platform content, escalating', {
+            kind,
+            platformId: identity.platformId,
+          });
+          return { phase: 'failed', terminalOutcome: platformEscalationOutcome(kind) };
+        }
+
+        return { rawResult: { kind, content }, phase: 'synthesizing' };
       }
 
       case 'cannot_answer':

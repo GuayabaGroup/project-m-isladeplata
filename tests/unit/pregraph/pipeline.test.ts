@@ -355,6 +355,37 @@ describe('Pipeline.process', () => {
     expect(config).toEqual({ configurable: { thread_id: 'biz-1:cli-1:whatsapp:1' } });
   });
 
+  it('propagates business general_comments into identity (Nivel A)', async () => {
+    const { deps, mocks } = makeDeps();
+    mocks.guacuco.resolveIdentity.mockResolvedValue(
+      fullIdentity({
+        businessStaffRoles: {
+          ...fullIdentity().businessStaffRoles,
+          general_comments: 'Solo aceptamos efectivo.',
+        },
+      }),
+    );
+    const pipeline = new Pipeline(deps);
+
+    await pipeline.process(makeMessage());
+
+    const [initialState] = mocks.graph.invoke.mock.calls[0] ?? [];
+    expect(initialState.identity).toMatchObject({
+      businessGeneralComments: 'Solo aceptamos efectivo.',
+    });
+  });
+
+  it('omits businessGeneralComments from identity when null', async () => {
+    const { deps, mocks } = makeDeps();
+    mocks.guacuco.resolveIdentity.mockResolvedValue(fullIdentity());
+    const pipeline = new Pipeline(deps);
+
+    await pipeline.process(makeMessage());
+
+    const [initialState] = mocks.graph.invoke.mock.calls[0] ?? [];
+    expect(initialState.identity).not.toHaveProperty('businessGeneralComments');
+  });
+
   it('returns ignored when graph result has no outcome', async () => {
     const { deps, mocks } = makeDeps();
     mocks.guacuco.resolveIdentity.mockResolvedValue(fullIdentity());

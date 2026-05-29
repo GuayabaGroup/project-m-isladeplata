@@ -13,6 +13,7 @@ import {
   type CheckpointerService,
   createCheckpointerService,
 } from '../infrastructure/checkpointer/PostgresCheckpointerService.js';
+import { PlatformContentLoader } from '../infrastructure/content/PlatformContentLoader.js';
 import { RetryClient } from '../infrastructure/http/RetryClient.js';
 import { createMetricsHandler } from '../infrastructure/http/metricsHandler.js';
 import { errorHandler } from '../infrastructure/http/middleware/errorHandler.js';
@@ -135,8 +136,19 @@ export async function bootstrap(): Promise<BootstrappedApp> {
 
   const llm = createLlmProvider(env, logger);
 
+  // Contenido de plataforma (Nivel B, H9.2). Carga UNA vez antes de compilar el
+  // grafo; archivos ausentes/vacíos → el subgrafo query escala a soporte.
+  const platformContent = new PlatformContentLoader(logger);
+  await platformContent.load(env.CONTENT_DIR);
+
   const threadResolver = new ThreadResolver(checkpointer, logger);
-  const graph = compileGraph({ checkpointer: checkpointer.saver, logger, llm, guacuco });
+  const graph = compileGraph({
+    checkpointer: checkpointer.saver,
+    logger,
+    llm,
+    guacuco,
+    platformContent,
+  });
 
   const persister = new ConversationPersister(guacuco, logger);
   const takeoverNotifier = new TakeoverNotifier(guacuco, takeover, logger);

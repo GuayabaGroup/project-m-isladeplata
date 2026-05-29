@@ -12,6 +12,7 @@ import {
   type QueryDraftState,
   initialQueryDraftState,
 } from '../../../../../src/graph/subgraphs/query/state.js';
+import type { PlatformContentLoader } from '../../../../../src/infrastructure/content/PlatformContentLoader.js';
 import {
   type AnthropicMessagesLike,
   AnthropicProvider,
@@ -174,6 +175,39 @@ describe('query.classifyQuery — staff', () => {
     expect(update.intent).toBe('staff_schedule_day');
     expect(update.phase).toBe('fetching');
   });
+
+  it('permite platform_commercial cuando rol=staff (Nivel B)', async () => {
+    const { llm } = makeLlm('{"intent":"platform_commercial","confidence":0.9}');
+    const node = makeClassifyQueryNode({ llm, logger: mockLogger });
+    const update = await node({
+      identity: IDENTITY_STAFF,
+      subgraphState: initialQueryDraftState('cuánto cuesta la plataforma'),
+    });
+    expect(update.intent).toBe('platform_commercial');
+    expect(update.phase).toBe('fetching');
+  });
+
+  it('permite platform_onboarding cuando rol=staff (Nivel B)', async () => {
+    const { llm } = makeLlm('{"intent":"platform_onboarding","confidence":0.88}');
+    const node = makeClassifyQueryNode({ llm, logger: mockLogger });
+    const update = await node({
+      identity: IDENTITY_STAFF,
+      subgraphState: initialQueryDraftState('cómo configuro mis horarios'),
+    });
+    expect(update.intent).toBe('platform_onboarding');
+    expect(update.phase).toBe('fetching');
+  });
+
+  it('rebajes platform_commercial a cannot_answer cuando rol=client', async () => {
+    const { llm } = makeLlm('{"intent":"platform_commercial","confidence":0.9}');
+    const node = makeClassifyQueryNode({ llm, logger: mockLogger });
+    const update = await node({
+      identity: IDENTITY_CLIENT,
+      subgraphState: initialQueryDraftState('cuánto cuesta la plataforma'),
+    });
+    expect(update.intent).toBe('cannot_answer');
+    expect(update.phase).toBe('synthesizing');
+  });
 });
 
 // ============================================================================
@@ -316,6 +350,81 @@ describe('query.fetchIntent — staff_schedule_day', () => {
 });
 
 // ============================================================================
+// fetchIntent — platform_commercial / platform_onboarding (Nivel B, H9.2)
+// ============================================================================
+
+describe('query.fetchIntent — platform content', () => {
+  const stubGuacuco = {} as GuacucoClient;
+
+  function loaderWith(map: Record<string, string>): PlatformContentLoader {
+    return {
+      get: (kind: string, platformId: number) => map[`${kind}:${platformId}`],
+    } as unknown as PlatformContentLoader;
+  }
+
+  it('staff + contenido cargado → rawResult {kind, content}, synthesizing', async () => {
+    const loader = loaderWith({ 'commercial:1': '# Allia\nPlan Pro: $10/mes.' });
+    const node = makeFetchIntentNode({
+      guacuco: stubGuacuco,
+      logger: mockLogger,
+      platformContent: loader,
+    });
+    const update = await node({
+      identity: IDENTITY_STAFF,
+      subgraphState: readyDraft('platform_commercial'),
+    });
+    expect(update.phase).toBe('synthesizing');
+    expect(update.rawResult).toEqual({
+      kind: 'commercial',
+      content: '# Allia\nPlan Pro: $10/mes.',
+    });
+  });
+
+  it('staff + SIN contenido → handed_off + takeover (escalación determinista)', async () => {
+    const node = makeFetchIntentNode({
+      guacuco: stubGuacuco,
+      logger: mockLogger,
+      platformContent: loaderWith({}),
+    });
+    const update = await node({
+      identity: IDENTITY_STAFF,
+      subgraphState: readyDraft('platform_onboarding'),
+    });
+    expect(update.phase).toBe('failed');
+    expect(update.terminalOutcome?.action).toBe('handed_off');
+    expect(update.terminalOutcome?.takeover?.reasonCode).toBe('other');
+    expect(update.terminalOutcome?.pendingReply?.text).toMatch(/soporte/i);
+  });
+
+  it('staff + loader ausente (undefined) → escala (default seguro)', async () => {
+    const node = makeFetchIntentNode({ guacuco: stubGuacuco, logger: mockLogger });
+    const update = await node({
+      identity: IDENTITY_STAFF,
+      subgraphState: readyDraft('platform_commercial'),
+    });
+    expect(update.phase).toBe('failed');
+    expect(update.terminalOutcome?.action).toBe('handed_off');
+  });
+
+  it('client pidiendo platform content → FORBIDDEN, sin leer loader', async () => {
+    const get = vi.fn();
+    const node = makeFetchIntentNode({
+      guacuco: stubGuacuco,
+      logger: mockLogger,
+      platformContent: { get } as unknown as PlatformContentLoader,
+    });
+    const update = await node({
+      identity: IDENTITY_CLIENT,
+      subgraphState: readyDraft('platform_commercial'),
+    });
+    expect(get).not.toHaveBeenCalled();
+    expect(update.phase).toBe('failed');
+    expect(update.terminalOutcome?.action).toBe('response');
+    expect(update.terminalOutcome?.pendingReply?.text).toMatch(/no tengo acceso|otra cosa/i);
+  });
+});
+
+// ============================================================================
 // synthesizeResponse
 // ============================================================================
 
@@ -371,6 +480,27 @@ describe('query.synthesizeResponse', () => {
     };
     const update = await node({ subgraphState: draft });
     expect(update.terminalOutcome?.pendingReply?.text).toMatch(/servicios/i);
+  });
+
+  it('intent=platform_commercial: pasa el content oficial al LLM', async () => {
+    const { llm, create } = makeLlm('El plan Pro cuesta $10 por mes.');
+    const node = makeSynthesizeResponseNode({ llm, logger: mockLogger });
+    const draft: QueryDraftState = {
+      ...initialQueryDraftState('cuánto cuesta'),
+      intent: 'platform_commercial',
+      rawResult: { kind: 'commercial', content: '# Allia\nPlan Pro: $10/mes.' },
+      phase: 'synthesizing',
+    };
+    const update = await node({ identity: IDENTITY_STAFF, subgraphState: draft });
+    expect(update.phase).toBe('done');
+    expect(update.terminalOutcome?.action).toBe('response');
+    const call = create.mock.calls[0]?.[0] as {
+      system?: string;
+      messages?: Array<{ content: string }>;
+    };
+    expect(call?.messages?.[0]?.content).toContain('Plan Pro');
+    // Usó la task anti-alucinación de plataforma, no la genérica.
+    expect(call?.system).toMatch(/NO inventes/i);
   });
 
   it('cap raw_result a 2000 chars en el prompt', async () => {

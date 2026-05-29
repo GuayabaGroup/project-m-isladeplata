@@ -127,3 +127,62 @@ describe('buildPersona', () => {
     expect(ctx.businessName).toBe('el negocio');
   });
 });
+
+describe('buildPersona business_policies_and_notes (Nivel A)', () => {
+  it('maps identity.businessGeneralComments into the persona context', () => {
+    const ctx = toPersonaContext({
+      ...BASE_IDENTITY,
+      businessGeneralComments: 'Solo aceptamos efectivo.',
+    });
+    expect(ctx.businessPolicies).toBe('Solo aceptamos efectivo.');
+  });
+
+  it('emits the authoritative block with the notes when present', () => {
+    const persona = buildPersona(
+      toPersonaContext({
+        ...BASE_IDENTITY,
+        businessGeneralComments: 'Cancelaciones con 24h de anticipación.',
+      }),
+    );
+    expect(persona).toContain('<business_policies_and_notes>');
+    expect(persona).toContain('Cancelaciones con 24h de anticipación.');
+    expect(persona).toMatch(/CONTEXTO AUTORITATIVO/i);
+  });
+
+  it('emits the block for staff profiles too (parity with IDP)', () => {
+    const persona = buildPersona(
+      toPersonaContext({
+        ...BASE_IDENTITY,
+        profileType: 'staff',
+        businessGeneralComments: 'Transferencias aceptadas.',
+      }),
+    );
+    expect(persona).toContain('<business_policies_and_notes>');
+    expect(persona).toContain('Transferencias aceptadas.');
+  });
+
+  it('omits the block when comments are null', () => {
+    const persona = buildPersona(toPersonaContext(BASE_IDENTITY));
+    expect(persona).not.toContain('<business_policies_and_notes>');
+  });
+
+  it('omits the block when comments are empty or whitespace', () => {
+    const empty = buildPersona(toPersonaContext({ ...BASE_IDENTITY, businessGeneralComments: '' }));
+    const blank = buildPersona(
+      toPersonaContext({ ...BASE_IDENTITY, businessGeneralComments: '   \n  ' }),
+    );
+    expect(empty).not.toContain('<business_policies_and_notes>');
+    expect(blank).not.toContain('<business_policies_and_notes>');
+  });
+
+  it('escapes XML metacharacters in the notes', () => {
+    const persona = buildPersona(
+      toPersonaContext({
+        ...BASE_IDENTITY,
+        businessGeneralComments: 'Niños < 5 años & adultos > 65 gratis.',
+      }),
+    );
+    expect(persona).toContain('Niños &lt; 5 años &amp; adultos &gt; 65 gratis.');
+    expect(persona).not.toContain('< 5 años');
+  });
+});
