@@ -103,6 +103,13 @@ describe('buildPersona', () => {
     expect(persona).toMatch(/Latin American/i);
   });
 
+  it('always includes the WhatsApp response-formatting rule', () => {
+    const persona = buildPersona(toPersonaContext(BASE_IDENTITY));
+    expect(persona).toContain('RESPONSE FORMATTING');
+    expect(persona).toContain('single asterisks');
+    expect(persona).toMatch(/NEVER use Markdown/i);
+  });
+
   it('omits the AI-identity-disclosure block by default', () => {
     const persona = buildPersona(toPersonaContext(BASE_IDENTITY));
     expect(persona).not.toContain('AI IDENTITY');

@@ -15,9 +15,10 @@ import { buildAlliaPrompt, buildDivappPrompt, buildGroomiaPrompt } from './platf
  * / `successResponse` / `synthesizeResponse` de los subgrafos.
  *
  * Orden del bloque (decisión de diseño): persona de marca (con el nombre del
- * asistente resuelto) → regla de identidad del negocio → (opcional) disclosure
- * de IA → instrucción de acento. El acento va ÚLTIMO para que sus pronombres
- * (voseo/tuteo) prevalezcan sobre cualquier ejemplo de la persona.
+ * asistente resuelto) → regla de identidad del negocio → regla de formato de
+ * respuesta → (opcional) disclosure de IA → instrucción de acento. El acento va
+ * ÚLTIMO para que sus pronombres (voseo/tuteo) prevalezcan sobre cualquier
+ * ejemplo de la persona.
  */
 
 export interface PersonaContext {
@@ -40,6 +41,22 @@ export interface BuildPersonaOptions {
 }
 
 const DEFAULT_BUSINESS_NAME = 'el negocio';
+
+/**
+ * Regla de formato transversal a todas las marcas y canales. Gobierna el markup
+ * y la escaneabilidad de la salida (qué resaltar, cuándo listar, cómo separar
+ * ideas); el tono y los emojis siguen siendo responsabilidad de cada persona de
+ * marca. Va dentro de `buildPersona` para que TODOS los nodos que generan prosa
+ * lo hereden desde un único lugar (DRY). El markup es el NATIVO de WhatsApp
+ * (asterisco simple = negrita), no markdown: el `ResponseBuilder` no convierte,
+ * solo trunca, así que el LLM debe emitir el formato final tal cual.
+ */
+const RESPONSE_FORMATTING = `RESPONSE FORMATTING (WhatsApp): Make every reply easy to scan, using WhatsApp's native markup — NOT Markdown.
+- Bold is *single asterisks*, italic is _single underscores_. NEVER use Markdown (**double asterisks**, # headers, tables) — WhatsApp renders it literally.
+- Bold the key data the user cares about: dates, times, names, services, prices. E.g. "Tu cita: *mañana 16:00* con *Ana*."
+- For 2+ items, write a bulleted list — one item per line, each starting with "• " — instead of cramming them into one comma-separated sentence.
+- Separate distinct ideas with a line break instead of one long paragraph.
+- Formatting improves readability; it does NOT license longer messages. Keep replies short. A single fact stays as one plain sentence — do not over-format trivial replies.`;
 
 /** Deriva el `PersonaContext` desde el `Identity` del state. */
 export function toPersonaContext(identity: Identity): PersonaContext {
@@ -75,6 +92,7 @@ export function buildPersona(ctx: PersonaContext, opts?: BuildPersonaOptions): s
   const parts: string[] = [
     platformPersona(ctx.platformId, assistantName),
     `BUSINESS IDENTITY: You assist on behalf of "${ctx.businessName}". When greeting the user or naming the business, ALWAYS use "${ctx.businessName}" — NEVER the internal platform name (Allia/Divapp/Groomia).`,
+    RESPONSE_FORMATTING,
   ];
 
   if (opts?.aiIdentityDisclosure) {
