@@ -5,6 +5,7 @@ import axios, {
   type AxiosResponse,
 } from 'axios';
 import type { Logger } from 'winston';
+import type { OutboundHttpClient } from '../../core/types/HttpClient.js';
 
 const MAX_RETRIES = 2;
 const BASE_BACKOFF_MS = 200;
@@ -25,8 +26,13 @@ export interface RetryClientOptions {
  *
  * All HTTP clients toward owned backends (Guacuco, Parguito) must use this
  * via `BaseHttpClient` — see §6 REGLAS_ISLADEPLATA.
+ *
+ * Implementa `OutboundHttpClient` (puerto `core/`) para que capas que no pueden
+ * importar `infrastructure/http/` (ej. `channels/`) dependan del contrato, no
+ * del concreto. `AxiosResponse<T>` es estructuralmente compatible con
+ * `HttpResponse<T>`.
  */
-export class RetryClient {
+export class RetryClient implements OutboundHttpClient {
   private readonly axios: AxiosInstance;
   private readonly logger: Logger;
 

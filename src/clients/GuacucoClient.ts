@@ -1,10 +1,10 @@
-import { AxiosError } from 'axios';
 import { GUACUCO_TOOLS, type GuacucoToolName } from '../core/enums/GuacucoToolName.js';
 import { IdentityNotFoundError } from '../core/errors/IdentityNotFoundError.js';
 import { IdpError } from '../core/errors/IdpError.js';
 import { ToolExecutionError } from '../core/errors/ToolExecutionError.js';
 import type { Identity } from '../core/types/Identity.js';
 import type { RecentTemplate } from '../core/types/RecentTemplate.js';
+import { httpErrorMessage, httpStatusOf } from '../infrastructure/http/httpError.js';
 import { BaseHttpClient } from './BaseHttpClient.js';
 import { mapRawToResolveIdentityOutput } from './mappers/IdentityMapper.js';
 import { mapRawToRecentTemplate } from './mappers/RecentTemplateMapper.js';
@@ -121,18 +121,17 @@ export class GuacucoClient extends BaseHttpClient {
       if (err instanceof ToolExecutionError && err.code === 'USER_NOT_FOUND') {
         throw new IdentityNotFoundError(err.message, err.details);
       }
-      if (err instanceof AxiosError && err.response?.status === 404) {
+      if (httpStatusOf(err) === 404) {
         throw new IdentityNotFoundError('Identity not found', {
           channelType: input.channelType,
           phoneNumberId: input.phoneNumberId,
         });
       }
       if (err instanceof IdpError) throw err;
-      const ax = err as AxiosError;
       throw new ToolExecutionError(
         'guacuco_identity_error',
-        ax.message ?? 'Guacuco identity/resolve failed',
-        { status: ax.response?.status },
+        httpErrorMessage(err) ?? 'Guacuco identity/resolve failed',
+        { status: httpStatusOf(err) },
       );
     }
   }

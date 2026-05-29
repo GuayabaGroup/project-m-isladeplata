@@ -613,15 +613,41 @@ function scheduleDispatchNode(state: GraphState): GraphStateUpdate {
 // Conditional edge routers — leen subgraphState.phase y deciden próximo nodo.
 // ============================================================================
 
+/**
+ * Type guard compartido por todos los routers condicionales: el draft existe,
+ * no falló, y no tiene `terminalOutcome` pendiente → el subgrafo sigue activo.
+ * Usado como `if (!isActiveDraft(draft)) return '*_finalize'` para que TS
+ * estreche `draft` a no-null tras el guard. Centraliza el predicado que ~20
+ * routers repetían inline.
+ */
+function isActiveDraft<T extends { phase?: string; terminalOutcome?: unknown }>(
+  draft: T | null | undefined,
+): draft is T {
+  return !!draft && draft.phase !== 'failed' && !draft.terminalOutcome;
+}
+
 function readDraft(state: GraphState): AppointmentDraftState | null {
   return (state.subgraphState as AppointmentDraftState | null) ?? null;
+}
+
+/**
+ * Factory de lectores de draft por `__kind`: devuelve el subgraphState tipado
+ * solo si su discriminador coincide, sino `null`. Centraliza el patrón idéntico
+ * de confirm/cancel/reschedule/query. (schedule usa su propio `readDraft` sin
+ * `__kind` por ser el primer subgrafo.)
+ */
+function makeReadDraft<T extends { __kind: string }>(kind: T['__kind']) {
+  return (state: GraphState): T | null => {
+    const sub = state.subgraphState as T | null;
+    return sub?.__kind === kind ? sub : null;
+  };
 }
 
 function routeAfterResolve(
   state: GraphState,
 ): 'schedule_ask_slot' | 'schedule_validate' | 'schedule_finalize' {
   const draft = readDraft(state);
-  if (!draft || draft.phase === 'failed' || draft.terminalOutcome) return 'schedule_finalize';
+  if (!isActiveDraft(draft)) return 'schedule_finalize';
   const profileType = state.identity?.profileType ?? 'client';
   const missing = checkCompleteness(draft.slots, profileType);
   return missing === null ? 'schedule_validate' : 'schedule_ask_slot';
@@ -629,7 +655,7 @@ function routeAfterResolve(
 
 function routeAfterAskSlot(state: GraphState): 'schedule_resolve' | 'schedule_finalize' {
   const draft = readDraft(state);
-  if (!draft || draft.phase === 'failed' || draft.terminalOutcome) return 'schedule_finalize';
+  if (!isActiveDraft(draft)) return 'schedule_finalize';
   return 'schedule_resolve';
 }
 
@@ -637,7 +663,7 @@ function routeAfterValidate(
   state: GraphState,
 ): 'schedule_build_confirm' | 'schedule_present' | 'schedule_finalize' {
   const draft = readDraft(state);
-  if (!draft || draft.phase === 'failed' || draft.terminalOutcome) return 'schedule_finalize';
+  if (!isActiveDraft(draft)) return 'schedule_finalize';
   if (draft.phase === 'awaiting_confirmation') return 'schedule_build_confirm';
   if (draft.phase === 'awaiting_pick') return 'schedule_present';
   // Fallback (collecting / unexpected): vuelve a finalize (defensa)
@@ -648,7 +674,7 @@ function routeAfterPresent(
   state: GraphState,
 ): 'schedule_build_confirm' | 'schedule_resolve' | 'schedule_present' | 'schedule_finalize' {
   const draft = readDraft(state);
-  if (!draft || draft.phase === 'failed' || draft.terminalOutcome) return 'schedule_finalize';
+  if (!isActiveDraft(draft)) return 'schedule_finalize';
   if (draft.phase === 'awaiting_confirmation') return 'schedule_build_confirm';
   if (draft.phase === 'collecting') return 'schedule_resolve';
   if (draft.phase === 'awaiting_pick') return 'schedule_present';
@@ -659,7 +685,7 @@ function routeAfterGate(
   state: GraphState,
 ): 'schedule_commit' | 'schedule_resolve' | 'schedule_finalize' {
   const draft = readDraft(state);
-  if (!draft || draft.phase === 'failed' || draft.terminalOutcome) return 'schedule_finalize';
+  if (!isActiveDraft(draft)) return 'schedule_finalize';
   if (draft.phase === 'committing') return 'schedule_commit';
   if (draft.phase === 'collecting') return 'schedule_resolve';
   return 'schedule_finalize';
@@ -669,7 +695,7 @@ function routeAfterCommit(
   state: GraphState,
 ): 'schedule_success' | 'schedule_validate' | 'schedule_finalize' {
   const draft = readDraft(state);
-  if (!draft || draft.phase === 'failed' || draft.terminalOutcome) {
+  if (!isActiveDraft(draft)) {
     // Failed (or no draft) → finalize sin success response.
     // (commit setea terminalOutcome cuando falla, finalize lo propaga al outcome global)
     return 'schedule_finalize';
@@ -694,17 +720,13 @@ function confirmDispatchNode(state: GraphState): GraphStateUpdate {
   };
 }
 
-function readConfirmDraft(state: GraphState): ConfirmDraftState | null {
-  const sub = state.subgraphState as ConfirmDraftState | null;
-  if (sub?.__kind !== 'confirm') return null;
-  return sub;
-}
+const readConfirmDraft = makeReadDraft<ConfirmDraftState>('confirm');
 
 function routeAfterConfirmBootstrap(
   state: GraphState,
 ): 'confirm_ask_slot' | 'confirm_commit' | 'confirm_finalize' {
   const draft = readConfirmDraft(state);
-  if (!draft || draft.phase === 'failed' || draft.terminalOutcome) return 'confirm_finalize';
+  if (!isActiveDraft(draft)) return 'confirm_finalize';
   if (draft.phase === 'committing') return 'confirm_commit';
   if (draft.phase === 'collecting') return 'confirm_ask_slot';
   return 'confirm_finalize';
@@ -714,7 +736,7 @@ function routeAfterConfirmAskSlot(
   state: GraphState,
 ): 'confirm_ask_slot' | 'confirm_commit' | 'confirm_finalize' {
   const draft = readConfirmDraft(state);
-  if (!draft || draft.phase === 'failed' || draft.terminalOutcome) return 'confirm_finalize';
+  if (!isActiveDraft(draft)) return 'confirm_finalize';
   if (draft.phase === 'committing') return 'confirm_commit';
   // collecting: slot todavía empty/guessed → loop a ask_slot
   return 'confirm_ask_slot';
@@ -722,7 +744,7 @@ function routeAfterConfirmAskSlot(
 
 function routeAfterConfirmCommit(state: GraphState): 'confirm_success' | 'confirm_finalize' {
   const draft = readConfirmDraft(state);
-  if (!draft || draft.phase === 'failed' || draft.terminalOutcome) return 'confirm_finalize';
+  if (!isActiveDraft(draft)) return 'confirm_finalize';
   if (draft.phase === 'done') return 'confirm_success';
   return 'confirm_finalize';
 }
@@ -742,17 +764,13 @@ function cancelDispatchNode(state: GraphState): GraphStateUpdate {
   };
 }
 
-function readCancelDraft(state: GraphState): CancelDraftState | null {
-  const sub = state.subgraphState as CancelDraftState | null;
-  if (sub?.__kind !== 'cancel') return null;
-  return sub;
-}
+const readCancelDraft = makeReadDraft<CancelDraftState>('cancel');
 
 function routeAfterCancelBootstrap(
   state: GraphState,
 ): 'cancel_ask_slot' | 'cancel_build_confirm' | 'cancel_finalize' {
   const draft = readCancelDraft(state);
-  if (!draft || draft.phase === 'failed' || draft.terminalOutcome) return 'cancel_finalize';
+  if (!isActiveDraft(draft)) return 'cancel_finalize';
   if (draft.phase === 'awaiting_confirmation') return 'cancel_build_confirm';
   if (draft.phase === 'collecting') return 'cancel_ask_slot';
   return 'cancel_finalize';
@@ -762,7 +780,7 @@ function routeAfterCancelAskSlot(
   state: GraphState,
 ): 'cancel_ask_slot' | 'cancel_build_confirm' | 'cancel_finalize' {
   const draft = readCancelDraft(state);
-  if (!draft || draft.phase === 'failed' || draft.terminalOutcome) return 'cancel_finalize';
+  if (!isActiveDraft(draft)) return 'cancel_finalize';
   if (draft.phase === 'awaiting_confirmation') return 'cancel_build_confirm';
   return 'cancel_ask_slot';
 }
@@ -771,7 +789,7 @@ function routeAfterCancelGate(
   state: GraphState,
 ): 'cancel_commit' | 'cancel_ask_slot' | 'cancel_finalize' {
   const draft = readCancelDraft(state);
-  if (!draft || draft.phase === 'failed' || draft.terminalOutcome) return 'cancel_finalize';
+  if (!isActiveDraft(draft)) return 'cancel_finalize';
   if (draft.phase === 'committing') return 'cancel_commit';
   if (draft.phase === 'collecting') return 'cancel_ask_slot';
   return 'cancel_finalize';
@@ -779,7 +797,7 @@ function routeAfterCancelGate(
 
 function routeAfterCancelCommit(state: GraphState): 'cancel_success' | 'cancel_finalize' {
   const draft = readCancelDraft(state);
-  if (!draft || draft.phase === 'failed' || draft.terminalOutcome) return 'cancel_finalize';
+  if (!isActiveDraft(draft)) return 'cancel_finalize';
   if (draft.phase === 'done') return 'cancel_success';
   return 'cancel_finalize';
 }
@@ -802,17 +820,13 @@ function rescheduleDispatchNode(state: GraphState): GraphStateUpdate {
   };
 }
 
-function readRescheduleDraft(state: GraphState): RescheduleDraftState | null {
-  const sub = state.subgraphState as RescheduleDraftState | null;
-  if (sub?.__kind !== 'reschedule') return null;
-  return sub;
-}
+const readRescheduleDraft = makeReadDraft<RescheduleDraftState>('reschedule');
 
 function routeAfterRescheduleBootstrap(
   state: GraphState,
 ): 'reschedule_ask_slot' | 'reschedule_validate' | 'reschedule_finalize' {
   const draft = readRescheduleDraft(state);
-  if (!draft || draft.phase === 'failed' || draft.terminalOutcome) return 'reschedule_finalize';
+  if (!isActiveDraft(draft)) return 'reschedule_finalize';
   return decideAfterCollecting(draft);
 }
 
@@ -820,7 +834,7 @@ function routeAfterRescheduleAskSlot(
   state: GraphState,
 ): 'reschedule_ask_slot' | 'reschedule_validate' | 'reschedule_finalize' {
   const draft = readRescheduleDraft(state);
-  if (!draft || draft.phase === 'failed' || draft.terminalOutcome) return 'reschedule_finalize';
+  if (!isActiveDraft(draft)) return 'reschedule_finalize';
   return decideAfterCollecting(draft);
 }
 
@@ -842,7 +856,7 @@ function routeAfterRescheduleValidate(
   state: GraphState,
 ): 'reschedule_build_confirm' | 'reschedule_present' | 'reschedule_finalize' {
   const draft = readRescheduleDraft(state);
-  if (!draft || draft.phase === 'failed' || draft.terminalOutcome) return 'reschedule_finalize';
+  if (!isActiveDraft(draft)) return 'reschedule_finalize';
   if (draft.phase === 'awaiting_confirmation') return 'reschedule_build_confirm';
   if (draft.phase === 'awaiting_pick') return 'reschedule_present';
   return 'reschedule_finalize';
@@ -856,7 +870,7 @@ function routeAfterReschedulePresent(
   | 'reschedule_present'
   | 'reschedule_finalize' {
   const draft = readRescheduleDraft(state);
-  if (!draft || draft.phase === 'failed' || draft.terminalOutcome) return 'reschedule_finalize';
+  if (!isActiveDraft(draft)) return 'reschedule_finalize';
   if (draft.phase === 'awaiting_confirmation') return 'reschedule_build_confirm';
   if (draft.phase === 'collecting') return 'reschedule_validate';
   if (draft.phase === 'awaiting_pick') return 'reschedule_present';
@@ -867,7 +881,7 @@ function routeAfterRescheduleGate(
   state: GraphState,
 ): 'reschedule_commit' | 'reschedule_ask_slot' | 'reschedule_finalize' {
   const draft = readRescheduleDraft(state);
-  if (!draft || draft.phase === 'failed' || draft.terminalOutcome) return 'reschedule_finalize';
+  if (!isActiveDraft(draft)) return 'reschedule_finalize';
   if (draft.phase === 'committing') return 'reschedule_commit';
   if (draft.phase === 'collecting') return 'reschedule_ask_slot';
   return 'reschedule_finalize';
@@ -877,7 +891,7 @@ function routeAfterRescheduleCommit(
   state: GraphState,
 ): 'reschedule_success' | 'reschedule_validate' | 'reschedule_finalize' {
   const draft = readRescheduleDraft(state);
-  if (!draft || draft.phase === 'failed' || draft.terminalOutcome) return 'reschedule_finalize';
+  if (!isActiveDraft(draft)) return 'reschedule_finalize';
   if (draft.phase === 'validating_availability') return 'reschedule_validate';
   if (draft.phase === 'done') return 'reschedule_success';
   return 'reschedule_finalize';
@@ -901,17 +915,13 @@ function queryDispatchNode(state: GraphState): GraphStateUpdate {
   };
 }
 
-function readQueryDraft(state: GraphState): QueryDraftState | null {
-  const sub = state.subgraphState as QueryDraftState | null;
-  if (sub?.__kind !== 'query') return null;
-  return sub;
-}
+const readQueryDraft = makeReadDraft<QueryDraftState>('query');
 
 function routeAfterQueryClassify(
   state: GraphState,
 ): 'query_fetch' | 'query_synthesize' | 'query_finalize' {
   const draft = readQueryDraft(state);
-  if (!draft || draft.phase === 'failed' || draft.terminalOutcome) return 'query_finalize';
+  if (!isActiveDraft(draft)) return 'query_finalize';
   if (draft.phase === 'fetching') return 'query_fetch';
   if (draft.phase === 'synthesizing') return 'query_synthesize';
   return 'query_finalize';
@@ -919,7 +929,7 @@ function routeAfterQueryClassify(
 
 function routeAfterQueryFetch(state: GraphState): 'query_synthesize' | 'query_finalize' {
   const draft = readQueryDraft(state);
-  if (!draft || draft.phase === 'failed' || draft.terminalOutcome) return 'query_finalize';
+  if (!isActiveDraft(draft)) return 'query_finalize';
   if (draft.phase === 'synthesizing') return 'query_synthesize';
   return 'query_finalize';
 }

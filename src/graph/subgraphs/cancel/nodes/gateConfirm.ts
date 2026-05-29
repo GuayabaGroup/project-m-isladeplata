@@ -1,18 +1,18 @@
-import { interrupt } from '@langchain/langgraph';
 import type { Logger } from 'winston';
 import type { Outcome } from '../../../../core/types/Outcome.js';
-import type { ResumePayload } from '../../schedule/nodes/askSlot.js';
+import { runGateConfirm } from '../../common/gateConfirm.js';
 import type { CancelDraftState } from '../state.js';
 
 /**
- * Gate de confirmación para cancel. Mismo patrón que schedule.gateConfirm
- * pero opera sobre `CancelDraftState`. Texto y semántica distintos:
+ * Gate de confirmación para cancel. La mecánica (interrupt + matching de
+ * `intentUuid`) vive en `common/gateConfirm.ts`; acá solo el texto/título
+ * propios y el mapeo de la decisión a `Partial<CancelDraftState>`:
  *
- * - `confirm:<uuid>` matchea → `phase='committing'` (procede al cancel commit).
- * - `cancel:<uuid>` matchea → cancel del gate (NO del turno) — limpia
- *   confirmation, vuelve a 'collecting'. Slots preservados para que el
+ * - `confirm:<uuid>` → `phase='committing'` (procede al cancel commit).
+ * - `cancel:<uuid>`, stale uuid o texto libre → cancel del GATE (no del turno):
+ *   limpia confirmation, vuelve a 'collecting'. Slots preservados para que el
  *   usuario eventualmente elija otro turno.
- * - Stale uuid o texto libre → cancel implícito (idem).
+ * - confirmación ausente → `phase='failed'` con outcome de error.
  */
 
 export interface CancelGateDeps {
@@ -33,61 +33,13 @@ export function makeCancelGateConfirmNode(deps: CancelGateDeps) {
     subgraphState?: unknown;
   }): Partial<CancelDraftState> {
     const current = state.subgraphState as CancelDraftState | undefined;
-    if (!current) return { phase: 'failed', terminalOutcome: NO_GATE_OUTCOME };
-
-    const { intentUuid, message } = current.confirmation;
-    if (!intentUuid || !message) {
-      logger.warn('cancel.gateConfirm: missing intentUuid or message');
-      return { phase: 'failed', terminalOutcome: NO_GATE_OUTCOME };
+    switch (runGateConfirm({ logger, confirmTitle: 'Sí, cancelar', logLabel: 'cancel' }, current)) {
+      case 'commit':
+        return { phase: 'committing' };
+      case 'reset_gate':
+        return { confirmation: {}, phase: 'collecting' };
+      default:
+        return { phase: 'failed', terminalOutcome: NO_GATE_OUTCOME };
     }
-
-    const payload: NonNullable<Outcome['pendingReply']> = {
-      text: message,
-      buttons: [
-        { id: `confirm:${intentUuid}`, title: 'Sí, cancelar' },
-        { id: `cancel:${intentUuid}`, title: 'No' },
-      ],
-    };
-
-    const reply = interrupt({ pendingReply: payload }) as ResumePayload;
-
-    logger.debug('cancel.gateConfirm resumed', {
-      hasButton: !!reply?.buttonId,
-      textLen: reply?.text?.length ?? 0,
-    });
-
-    return processReply(reply, current);
-  };
-}
-
-function processReply(
-  reply: ResumePayload | undefined,
-  current: CancelDraftState,
-): Partial<CancelDraftState> {
-  const safe = reply ?? { text: '' };
-  const buttonId = safe.buttonId;
-  const intentUuid = current.confirmation.intentUuid;
-
-  if (buttonId && intentUuid) {
-    if (buttonId === `confirm:${intentUuid}`) {
-      return { phase: 'committing' };
-    }
-    if (buttonId === `cancel:${intentUuid}`) {
-      return cancelGate();
-    }
-  }
-
-  // Stale uuid, button distinto, texto libre → cancel del gate (no del turno)
-  return cancelGate();
-}
-
-/**
- * Cancela el gate (no el turno). Limpia confirmation. Vuelve a 'collecting'.
- * Slots preservados para que el usuario reintente con otro turno si quiere.
- */
-function cancelGate(): Partial<CancelDraftState> {
-  return {
-    confirmation: {},
-    phase: 'collecting',
   };
 }

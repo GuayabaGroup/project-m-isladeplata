@@ -1,6 +1,6 @@
-import type { AxiosResponse } from 'axios';
 import type { Logger } from 'winston';
 import { ToolExecutionError } from '../core/errors/ToolExecutionError.js';
+import type { HttpResponse } from '../core/types/HttpClient.js';
 import type { RetryClient } from '../infrastructure/http/RetryClient.js';
 import type { Envelope } from './types/Envelope.js';
 
@@ -38,7 +38,7 @@ export abstract class BaseHttpClient {
    * - `success: true` + `data` undefined → `{prefix}_missing_data`
    * - happy path → return `data`
    */
-  protected unwrap<T>(response: AxiosResponse<Envelope<T>>): T {
+  protected unwrap<T>(response: HttpResponse<Envelope<T>>): T {
     const body = response.data as unknown;
 
     if (

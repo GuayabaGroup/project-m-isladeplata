@@ -1,7 +1,7 @@
 import type { Logger } from 'winston';
 import { env } from '../../config/env.js';
 import { IdpError } from '../../core/errors/IdpError.js';
-import type { RetryClient } from '../../infrastructure/http/RetryClient.js';
+import type { OutboundHttpClient } from '../../core/types/HttpClient.js';
 import type { WhatsAppOutboundMessage } from './types.js';
 
 export interface WhatsAppSendInput {
@@ -27,7 +27,7 @@ interface WhatsAppSendResponse {
  */
 export class WhatsAppSender {
   constructor(
-    private readonly http: RetryClient,
+    private readonly http: OutboundHttpClient,
     private readonly logger: Logger,
   ) {}
 
