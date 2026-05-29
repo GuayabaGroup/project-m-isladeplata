@@ -1,6 +1,7 @@
 import type { ErrorRequestHandler } from 'express';
 import { IdpError } from '../../../core/errors/IdpError.js';
 import { logger } from '../../observability/logger.js';
+import { captureIdpError } from '../../observability/sentry.js';
 
 /**
  * Express error handler. Maps `IdpError` to 400 with `{error, message}`,
@@ -17,5 +18,6 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, _next) => {
     stack: err instanceof Error ? err.stack : undefined,
     path: req.path,
   });
+  captureIdpError(err, { component: 'errorHandler', path: req.path });
   res.status(500).json({ error: 'internal_error', message: 'Internal server error' });
 };

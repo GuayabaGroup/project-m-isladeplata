@@ -4,7 +4,12 @@ import type { GuacucoClient } from '../../../../../src/clients/GuacucoClient.js'
 import type { ChannelMessage } from '../../../../../src/core/types/ChannelMessage.js';
 import { EMPTY_CRM_CONTEXT } from '../../../../../src/core/types/CrmContext.js';
 import type { Identity } from '../../../../../src/core/types/Identity.js';
+import type {
+  LlmCompleteOutput,
+  LlmProvider,
+} from '../../../../../src/infrastructure/llm/LlmProvider.js';
 import type { GraphState } from '../../../../../src/graph/state.js';
+import type { ToolDeps } from '../../../../../src/graph/tools/Tool.js';
 import { forwardMessage } from '../../../../../src/graph/tools/support/forwardMessage.js';
 
 const mockLogger = {
@@ -50,38 +55,70 @@ function makeGuacuco(impl: GuacucoClient['forwardMessage']): GuacucoClient {
   return { forwardMessage: impl } as unknown as GuacucoClient;
 }
 
+/** Mock LlmProvider. `text` is the summary it returns; `''` simulates failure. */
+function makeLlm(text: string): LlmProvider {
+  const output: LlmCompleteOutput = {
+    text,
+    toolCalls: [],
+    stopReason: text.length > 0 ? 'end_turn' : 'error',
+    usage: { inputTokens: 0, outputTokens: 0 },
+  };
+  return { complete: vi.fn(async () => output) };
+}
+
+function makeDeps(
+  forward: GuacucoClient['forwardMessage'],
+  summary = 'El cliente avisa que llegó al local.',
+): ToolDeps {
+  return {
+    guacuco: makeGuacuco(forward),
+    logger: mockLogger,
+    llm: makeLlm(summary),
+  };
+}
+
 afterEach(() => vi.clearAllMocks());
 
 describe('forwardMessage tool', () => {
-  it('forwards sanitized text and returns confirmation', async () => {
+  it('forwards the LLM summary (not the raw text) and confirms', async () => {
     const forward = vi.fn(async () => ({}));
-    const update = await forwardMessage.run(makeState('Estoy en la <b>puerta</b>'), {
-      guacuco: makeGuacuco(forward as unknown as GuacucoClient['forwardMessage']),
-      logger: mockLogger,
-    });
-    expect(forward).toHaveBeenCalledWith('Estoy en la puerta', IDENTITY); // HTML stripped by sanitizeUserInput
+    const update = await forwardMessage.run(
+      makeState('Estoy en la <b>puerta</b>'),
+      makeDeps(forward as unknown as GuacucoClient['forwardMessage'], 'El cliente está en la puerta.'),
+    );
+    expect(forward).toHaveBeenCalledWith('El cliente está en la puerta.', IDENTITY);
     expect(update.outcome?.action).toBe('response');
     expect(update.outcome?.pendingReply?.text).toMatch(/enviado al negocio/i);
   });
 
-  it('returns ignored on empty input (nothing to forward)', async () => {
+  it('falls back to the raw sanitized text when the summary is empty (fail-open)', async () => {
+    const forward = vi.fn(async () => ({}));
+    const update = await forwardMessage.run(
+      makeState('Estoy en la <b>puerta</b>'),
+      makeDeps(forward as unknown as GuacucoClient['forwardMessage'], ''),
+    );
+    // HTML stripped by sanitizeUserInput; summary empty → raw text forwarded.
+    expect(forward).toHaveBeenCalledWith('Estoy en la puerta', IDENTITY);
+    expect(update.outcome?.action).toBe('response');
+  });
+
+  it('returns ignored on empty input (nothing to forward, no LLM call)', async () => {
     const forward = vi.fn();
-    const update = await forwardMessage.run(makeState('   '), {
-      guacuco: makeGuacuco(forward as unknown as GuacucoClient['forwardMessage']),
-      logger: mockLogger,
-    });
+    const deps = makeDeps(forward as unknown as GuacucoClient['forwardMessage']);
+    const update = await forwardMessage.run(makeState('   '), deps);
     expect(update.outcome?.action).toBe('ignored');
     expect(forward).not.toHaveBeenCalled();
+    expect(deps.llm.complete).not.toHaveBeenCalled();
   });
 
   it('returns error when identity is incomplete', async () => {
     const state = makeState('mensaje');
     state.identity = { ...IDENTITY, tenantAlliaId: '' };
     const forward = vi.fn();
-    const update = await forwardMessage.run(state, {
-      guacuco: makeGuacuco(forward as unknown as GuacucoClient['forwardMessage']),
-      logger: mockLogger,
-    });
+    const update = await forwardMessage.run(
+      state,
+      makeDeps(forward as unknown as GuacucoClient['forwardMessage']),
+    );
     expect(update.outcome?.action).toBe('error');
     expect(forward).not.toHaveBeenCalled();
   });
@@ -90,10 +127,10 @@ describe('forwardMessage tool', () => {
     const forward = vi.fn(async () => {
       throw new Error('upstream');
     });
-    const update = await forwardMessage.run(makeState('hola'), {
-      guacuco: makeGuacuco(forward as unknown as GuacucoClient['forwardMessage']),
-      logger: mockLogger,
-    });
+    const update = await forwardMessage.run(
+      makeState('hola'),
+      makeDeps(forward as unknown as GuacucoClient['forwardMessage']),
+    );
     expect(update.outcome?.action).toBe('error');
   });
 

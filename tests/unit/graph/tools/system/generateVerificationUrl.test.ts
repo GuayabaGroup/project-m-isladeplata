@@ -4,6 +4,7 @@ import type { GuacucoClient } from '../../../../../src/clients/GuacucoClient.js'
 import type { ChannelMessage } from '../../../../../src/core/types/ChannelMessage.js';
 import { EMPTY_CRM_CONTEXT } from '../../../../../src/core/types/CrmContext.js';
 import type { Identity } from '../../../../../src/core/types/Identity.js';
+import type { LlmProvider } from '../../../../../src/infrastructure/llm/LlmProvider.js';
 import type { GraphState } from '../../../../../src/graph/state.js';
 import { generateVerificationUrl } from '../../../../../src/graph/tools/system/generateVerificationUrl.js';
 
@@ -13,6 +14,9 @@ const mockLogger = {
   info: vi.fn(),
   debug: vi.fn(),
 } as unknown as Logger;
+
+// Unused by system tools (only forward_message summarizes), but ToolDeps requires it.
+const mockLlm = { complete: vi.fn() } as unknown as LlmProvider;
 
 const IDENTITY: Identity = {
   tenantUuid: 'biz-1',
@@ -58,6 +62,7 @@ describe('generateVerificationUrl tool', () => {
     const update = await generateVerificationUrl.run(makeState('client'), {
       guacuco: makeGuacuco(generate as unknown as GuacucoClient['generateVerificationUrl']),
       logger: mockLogger,
+      llm: mockLlm,
     });
     expect(update.outcome?.pendingReply?.cta?.url).toBe('https://verify.app/abc');
     expect(update.outcome?.pendingReply?.cta?.displayText).toBe('Verificar');
@@ -69,6 +74,7 @@ describe('generateVerificationUrl tool', () => {
     const update = await generateVerificationUrl.run(makeState('staff'), {
       guacuco: makeGuacuco(generate as unknown as GuacucoClient['generateVerificationUrl']),
       logger: mockLogger,
+      llm: mockLlm,
     });
     expect(update.outcome?.action).toBe('response');
   });
@@ -84,6 +90,7 @@ describe('generateVerificationUrl tool', () => {
     const update = await generateVerificationUrl.run(makeState(), {
       guacuco: makeGuacuco(generate as unknown as GuacucoClient['generateVerificationUrl']),
       logger: mockLogger,
+      llm: mockLlm,
     });
     expect(update.outcome?.action).toBe('error');
   });

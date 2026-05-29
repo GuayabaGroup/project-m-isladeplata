@@ -4,6 +4,7 @@ import type { GuacucoClient } from '../../../../../src/clients/GuacucoClient.js'
 import type { ChannelMessage } from '../../../../../src/core/types/ChannelMessage.js';
 import { EMPTY_CRM_CONTEXT } from '../../../../../src/core/types/CrmContext.js';
 import type { Identity } from '../../../../../src/core/types/Identity.js';
+import type { LlmProvider } from '../../../../../src/infrastructure/llm/LlmProvider.js';
 import type { GraphState } from '../../../../../src/graph/state.js';
 import { connectMercadoPago } from '../../../../../src/graph/tools/system/connectMercadoPago.js';
 
@@ -13,6 +14,9 @@ const mockLogger = {
   info: vi.fn(),
   debug: vi.fn(),
 } as unknown as Logger;
+
+// Unused by system tools (only forward_message summarizes), but ToolDeps requires it.
+const mockLlm = { complete: vi.fn() } as unknown as LlmProvider;
 
 const IDENTITY_STAFF: Identity = {
   tenantUuid: 'biz-1',
@@ -59,6 +63,7 @@ describe('connectMercadoPago tool', () => {
     const update = await connectMercadoPago.run(makeState(), {
       guacuco: makeGuacuco(connect as unknown as GuacucoClient['connectMercadoPago']),
       logger: mockLogger,
+      llm: mockLlm,
     });
     expect(update.outcome?.action).toBe('response');
     expect(update.outcome?.pendingReply?.cta?.displayText).toBe('Conectar');
@@ -76,6 +81,7 @@ describe('connectMercadoPago tool', () => {
     const update = await connectMercadoPago.run(state, {
       guacuco: makeGuacuco(connect as unknown as GuacucoClient['connectMercadoPago']),
       logger: mockLogger,
+      llm: mockLlm,
     });
     expect(update.outcome?.action).toBe('error');
     expect(connect).not.toHaveBeenCalled();
@@ -88,6 +94,7 @@ describe('connectMercadoPago tool', () => {
     const update = await connectMercadoPago.run(makeState(), {
       guacuco: makeGuacuco(connect as unknown as GuacucoClient['connectMercadoPago']),
       logger: mockLogger,
+      llm: mockLlm,
     });
     expect(update.outcome?.action).toBe('error');
   });

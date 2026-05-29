@@ -327,12 +327,10 @@ export class GuacucoClient extends BaseHttpClient {
   }
 
   /**
-   * Reenvía un mensaje del usuario al negocio.
-   *
-   * ⚠️ Pendiente backend: Guacuco NO expone hoy un handler `forward_message`
-   * (ver requerimiento `--g`). La llamada queda estandarizada del lado de IDP
-   * pero retornará error hasta que el handler exista. No usar en producción
-   * hasta entonces.
+   * Reenvía al negocio un mensaje del usuario (ya resumido por la tool
+   * `forward_message`). Guacuco resuelve el owner por `context.business_uuid` y
+   * envía el template `p12_forward_support` por WhatsApp (handler
+   * `ForwardMessageToolHandler`).
    */
   forwardMessage(originalMessage: string, identity: Identity): Promise<unknown> {
     return this.executeTool<unknown>(

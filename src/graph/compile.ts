@@ -129,7 +129,7 @@ export interface CompileGraphDeps {
 export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
   const { checkpointer, logger, llm, guacuco } = deps;
 
-  const toolDeps: ToolDeps = { guacuco, logger };
+  const toolDeps: ToolDeps = { guacuco, logger, llm };
 
   // Takeover humano (spec P-human-takeover). No agrega nodos al grafo: capa A
   // reusa el clasificador (`humanRequestEnabled` → emite el messageType

@@ -4,6 +4,7 @@ import type { GuacucoClient } from '../../../../../src/clients/GuacucoClient.js'
 import type { ChannelMessage } from '../../../../../src/core/types/ChannelMessage.js';
 import { EMPTY_CRM_CONTEXT } from '../../../../../src/core/types/CrmContext.js';
 import type { Identity } from '../../../../../src/core/types/Identity.js';
+import type { LlmProvider } from '../../../../../src/infrastructure/llm/LlmProvider.js';
 import type { GraphState } from '../../../../../src/graph/state.js';
 import { retrieveManzanilloUrl } from '../../../../../src/graph/tools/system/retrieveManzanilloUrl.js';
 
@@ -13,6 +14,9 @@ const mockLogger = {
   info: vi.fn(),
   debug: vi.fn(),
 } as unknown as Logger;
+
+// Unused by system tools (only forward_message summarizes), but ToolDeps requires it.
+const mockLlm = { complete: vi.fn() } as unknown as LlmProvider;
 
 const IDENTITY: Identity = {
   tenantUuid: 'biz-1',
@@ -59,6 +63,7 @@ describe('retrieveManzanilloUrl tool', () => {
     const update = await retrieveManzanilloUrl.run(makeState(), {
       guacuco: makeGuacuco(retrieve as unknown as GuacucoClient['retrieveManzanilloUrl']),
       logger: mockLogger,
+      llm: mockLlm,
     });
     expect(update.outcome?.action).toBe('response');
     expect(update.outcome?.pendingReply?.cta?.url).toBe('https://manzanillo.app/abc');
@@ -73,6 +78,7 @@ describe('retrieveManzanilloUrl tool', () => {
     const update = await retrieveManzanilloUrl.run(makeState(), {
       guacuco: makeGuacuco(retrieve as unknown as GuacucoClient['retrieveManzanilloUrl']),
       logger: mockLogger,
+      llm: mockLlm,
     });
     expect(update.outcome?.action).toBe('error');
     expect(update.outcome?.pendingReply?.text).toContain('link');
@@ -83,6 +89,7 @@ describe('retrieveManzanilloUrl tool', () => {
     const update = await retrieveManzanilloUrl.run(makeState(), {
       guacuco: makeGuacuco(retrieve as unknown as GuacucoClient['retrieveManzanilloUrl']),
       logger: mockLogger,
+      llm: mockLlm,
     });
     expect(update.outcome?.action).toBe('error');
   });
@@ -94,6 +101,7 @@ describe('retrieveManzanilloUrl tool', () => {
     const update = await retrieveManzanilloUrl.run(state, {
       guacuco: makeGuacuco(retrieve as unknown as GuacucoClient['retrieveManzanilloUrl']),
       logger: mockLogger,
+      llm: mockLlm,
     });
     expect(update.outcome?.action).toBe('error');
     expect(retrieve).not.toHaveBeenCalled();

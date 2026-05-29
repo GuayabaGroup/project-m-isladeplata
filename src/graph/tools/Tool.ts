@@ -1,6 +1,7 @@
 import type { Logger } from 'winston';
 import type { GuacucoClient } from '../../clients/GuacucoClient.js';
 import type { ProfileType } from '../../core/enums/ProfileType.js';
+import type { LlmProvider } from '../../infrastructure/llm/LlmProvider.js';
 import type { GraphState, GraphStateUpdate } from '../state.js';
 
 /**
@@ -14,6 +15,11 @@ import type { GraphState, GraphStateUpdate } from '../state.js';
 export interface ToolDeps {
   guacuco: GuacucoClient;
   logger: Logger;
+  /**
+   * Provider LLM. `forward_message` lo usa para resumir el mensaje + contexto
+   * antes de reenviarlo al negocio; es la primera tool atómica que llama al LLM.
+   */
+  llm: LlmProvider;
 }
 
 export interface AtomicTool {
