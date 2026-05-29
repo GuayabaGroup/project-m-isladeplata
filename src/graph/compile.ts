@@ -68,6 +68,7 @@ import { detectButtonShortcut } from './supervisor/buttonShortcut.js';
 import { makeClassifyIntentNode } from './supervisor/classifyIntent.js';
 import { detectAtomicTool, routeFromSupervisor } from './supervisor/router.js';
 import { makeSocialResponderNode } from './supervisor/socialResponder.js';
+import { detectUnsupportedContent } from './supervisor/unsupportedContent.js';
 import type { AtomicTool, ToolDeps } from './tools/Tool.js';
 import { forwardMessage } from './tools/support/forwardMessage.js';
 import { connectMercadoPago } from './tools/system/connectMercadoPago.js';
@@ -282,6 +283,7 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
     .addNode('query_finalize', subgraphFinalize)
     .addEdge(START, 'supervisor_entry')
     .addConditionalEdges('supervisor_entry', supervisorEntryRouter, {
+      unsupported_end: END,
       subgraph_placeholder: 'subgraph_placeholder',
       classify_intent: 'classify_intent',
       schedule_dispatch: 'schedule_dispatch',
@@ -463,6 +465,14 @@ function supervisorEntryNode(state: GraphState): GraphStateUpdate {
   const message = state.input?.channelMessage;
   if (!message) return {};
 
+  // Fast-path PRIMERO: contenido no soportado (image/audio/video/document/
+  // location) → respuesta canned sin LLM. Va antes del guard de subgrafo
+  // activo para que media a mitad de un flujo igual reciba respuesta.
+  const unsupported = detectUnsupportedContent(message.contentType);
+  if (unsupported) {
+    return { outcome: unsupported };
+  }
+
   // Si hay subgrafo activo, NO re-clasificamos — el resume va directo al
   // dispatcher correspondiente (que sabe cómo invocar el flujo interrumpido).
   // Query no interrumpe en el happy path, así que no debería ver active='query'
@@ -491,6 +501,7 @@ function supervisorEntryNode(state: GraphState): GraphStateUpdate {
 function supervisorEntryRouter(
   state: GraphState,
 ):
+  | 'unsupported_end'
   | 'subgraph_placeholder'
   | 'classify_intent'
   | 'schedule_dispatch'
@@ -498,6 +509,8 @@ function supervisorEntryRouter(
   | 'cancel_dispatch'
   | 'reschedule_dispatch'
   | 'query_dispatch' {
+  // El nodo setea `outcome` solo en el fast-path de contenido no soportado.
+  if (state.outcome) return 'unsupported_end';
   const active = state.routing?.activeSubgraph as ActiveSubgraph | undefined;
   if (active === 'schedule') return 'schedule_dispatch';
   if (active === 'confirm') return 'confirm_dispatch';

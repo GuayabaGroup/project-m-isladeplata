@@ -137,3 +137,104 @@ Implementado y verde (typecheck + 667 tests + lint). Estándar final:
 - ✅ §13 Errores: sin cambios; `ToolExecutionError` vía `unwrap`.
 - ✅ §15 Naming/un-componente-por-archivo: `GuacucoToolName.ts`, `ToolContextMapper.ts`, `UPPER_SNAKE`, `camelCase`.
 - Sin dead code (interfaces locales `*UrlResult` removidas de las atomic tools); sin secretos hardcodeados.
+
+---
+
+# Estandarización del envío de mensajes (outbound) IDP `--i` + Guacuco `--g` (2026-05-28)
+
+**Requerimiento:** "debe existir una estandarización de envío de mensajes, distintos tipos de
+mensajes, incluyendo templates, ya que --g consume --i para enviar mensajes de distintos tipos".
+
+Contrato único: `POST /api/v1/outbound/messages` con `type` (text | template | interactive | media).
+Guacuco migra sus 3 endpoints legacy (`send-template-message`, `send-text-message-staff/client`) a este.
+
+## Part A — IDP (project-m-isladeplata)
+- [x] A0. REGLAS_ISLADEPLATA.md §1/§2 — documentar nueva capa `outbound/`
+- [x] A1. core/types/OutboundMessage.ts — DTO union + interface `OutboundSender`
+- [x] A2. channels/whatsapp/types.ts — variantes outbound template + media
+- [x] A3. channels/whatsapp/sender.ts — `send()` retorna message id + traduce error Meta→IdpError
+- [x] A4. nlg/OutboundMessageBuilder.ts — DTO → WhatsAppOutboundMessage
+- [x] A5. channels/whatsapp/outboundSchema.ts — Zod discriminated union (snake_case → DTO)
+- [x] A6. outbound/OutboundMessageService.ts — orquestación (implementa OutboundSender)
+- [x] A7. infrastructure/http/middleware/apiKeyAuth.ts — API key timing-safe
+- [x] A8. channels/whatsapp/outboundHttpHandler.ts — handler + envelope (movido desde infra por §2)
+- [x] A9. infrastructure/http/registerRoutes.ts — montar POST /api/v1/outbound/messages
+- [x] A10. config/env.ts + tests/setup.ts + .env.example — IDP_API_KEY
+- [x] A11. main/bootstrap.ts — wire builder + service + handler
+- [x] A12. tests (Vitest) — builder, service, schema, sender, handler, apiKeyAuth
+
+## Part B — Guacuco (project-m-guacuco)
+- [x] B1. IdpMessagingClient.ts — repunta al endpoint unificado
+- [x] B2. IslaDePlataMessagingService.ts — los 4 métodos → endpoint unificado
+- [x] B3. tests (Jest) — IdpMessagingClient wire-format test nuevo
+
+## Verificación + audit
+- [x] IDP: pnpm typecheck ✅ · pnpm test 699/699 ✅ · pnpm lint ✅
+- [x] Guacuco: npm run build ✅ · npx jest 397/397 ✅
+- [x] Auditoría vs REGLAS_ISLADEPLATA + REGLAS_GUACUCO (ver Review)
+- [ ] Preguntar por PR
+
+---
+
+# Estandarización de inbound (IDP `--i`) (2026-05-28)
+
+**Requerimiento:** "ahora necesitamos estandarizar los inbound". Scope: representación
+interna + normalización (sin endpoint nuevo), solo WhatsApp (preparar abstracción),
+normalizar y transportar media, capturar payload + contextMessageId de template buttons.
+
+- [x] I-A. REGLAS_ISLADEPLATA.md §1/§7.1/§8.2/§12.1/§12.3
+- [x] I-B. core/enums/InboundContentType.ts + core/types/ChannelMessage.ts (contentType + media/location/templateButton)
+- [x] I-C. channels/whatsapp/types.ts — media/location/context en WhatsAppInboundMessage
+- [x] I-D. channels/whatsapp/normalizer.ts — todos los content types + template-button capture
+- [x] I-E. graph/supervisor/unsupportedContent.ts + wire en compile.ts (fast-path canned reply, ruta a END)
+- [x] I-F. channels/ChannelAdapter.ts (InboundChannelAdapter) + WhatsAppInboundAdapter.ts + registerRoutes + bootstrap
+- [x] I-G. tests: ~18 fixtures migradas (contentType), normalizer (todos los tipos), unsupportedContent, adapter, compile (media short-circuit)
+- [x] I-H. pnpm typecheck ✅ · pnpm test 710/710 ✅ · pnpm lint ✅
+
+## Review inbound
+
+**Implementado y verde.** `ChannelMessage` estandarizado con discriminador `contentType`
+requerido (`InboundContentType`); el normalizer de WhatsApp cubre TODOS los tipos entrantes
+(text/interactive/template_button/image/audio/video/document/location) en vez de dropear
+media; template buttons capturan `contextMessageId` + `payload`; contenido no soportado
+recibe respuesta canned sin LLM (fast-path del supervisor → END); `InboundChannelAdapter` +
+registry hacen drop-in un canal futuro (el grafo no se toca). Decisión: interfaz plana +
+tag (no union discriminada) por el blast radius de ~18 consumidores/fixtures.
+
+### Audit Results (REGLAS_ISLADEPLATA.md)
+- ✅ §2 Dirección de dependencias: nuevos archivos respetan capas — `outbound`/`graph`/
+  `channels` → `core` (valor); `infrastructure/http registerRoutes` → `channels` SOLO por
+  tipo (`import type`, mismo precedente que el webhook handler); `nlg`/`graph` → `channels/types`
+  por tipo (precedente `ResponseBuilder`/`buttonShortcut`). Sin `import axios` fuera de infra.
+- ✅ §4 ESM/`.js`/`import type`/zero `any` (biome verde).
+- ✅ §8.2 `outcome` en fast-path del supervisor (documentado); §9-clean (sin LLM, sin datos críticos).
+- ✅ §12.1/§12.3 estructura por canal + agnosticidad: grafo intacto; sumar canal = adapter + push al array.
+- ✅ §12.4 `CHANNEL_FORMATS` reusado (no aplica truncado a media).
+- ✅ §13.1 webhook sigue con `express.raw` por ruta (HMAC) dentro del adapter; sin `express.json` global.
+- ✅ §14 tests Vitest fuera del source; cobertura por content type + fast-path + adapter.
+- Sin dead code (factory de fixtures descartada al migrar inline).
+
+## Review outbound
+
+**Implementado y verde** en ambos sistemas. Estándar final:
+- Contrato único `POST /api/v1/outbound/messages` con `type` discriminado
+  (text | template | interactive | media). DTO agnóstico en `core/OutboundMessage.ts`.
+- Nueva capa `outbound/` documentada en REGLAS §1/§2 (aprobada por owner).
+- Resolución de canal por `(role, platformId)`; `user_type:owner→staff` colapsado en el schema.
+- Idempotencia opcional vía `DedupStore` (reuso). Templates HSM con quick-reply buttons
+  (componentes Meta exactos, `index` string). Media image/document.
+- WhatsAppSender retorna el wamid y traduce errores Meta→`IdpError(whatsapp_send_failed)`
+  con `details.meta` (sin importar axios fuera de infra).
+- Guacuco: interfaces públicas intactas; solo cambió wire body/URL/parse. Fire-and-forget
+  + `template_send_log` preservados.
+
+### Audit Results
+- ✅ §2 Dirección de dependencias: hallazgo en auto-audit → el handler estaba en
+  `infrastructure/http` con value-import de `channels/` (PROHIBIDO). **Corregido**: handler
+  movido a `channels/whatsapp/outboundHttpHandler.ts` (co-locado con webhook+schema); la
+  extracción del error Meta se movió al sender (acceso estructural, sin `import axios`).
+- ✅ §4 TS/ESM: imports `.js`, `import type`, zero `any`.
+- ✅ §12 Canales + §12.4: builder reusa `CHANNEL_FORMATS`/`truncate`; params de template NO truncados.
+- ✅ §13.1 Seguridad: `apiKeyAuth` con `timingSafeEqual` (no `===`); `IDP_API_KEY` min 16.
+- ✅ §13.2 Errores: `IdpError` en todo el path (nunca `new Error`).
+- ✅ Guacuco REGLAS §9/§11/§17: envelope `{success,data}`; fire-and-forget; AbortController; build ✅.

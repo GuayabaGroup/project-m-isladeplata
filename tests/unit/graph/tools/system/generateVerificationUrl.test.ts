@@ -29,6 +29,7 @@ function makeState(profileType: Identity['profileType'] = 'client'): GraphState 
     channelType: 'whatsapp',
     channelId: '5491100',
     messageId: 'wamid.1',
+    contentType: 'text',
     contentText: 'verificar',
     receivedAt: new Date().toISOString(),
     whatsappChannel: profileType === 'staff' ? 'staff' : 'client',

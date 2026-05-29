@@ -1,5 +1,9 @@
-import type { ChannelMessage } from '../../core/types/ChannelMessage.js';
-import type { WhatsAppInboundMessage, WhatsAppInboundPayload } from './types.js';
+import type { ChannelMessage, InboundMedia } from '../../core/types/ChannelMessage.js';
+import type {
+  WhatsAppInboundMedia,
+  WhatsAppInboundMessage,
+  WhatsAppInboundPayload,
+} from './types.js';
 
 /**
  * Walk a WhatsApp Cloud API webhook payload and emit one `ChannelMessage`
@@ -64,6 +68,7 @@ function mapMessage(
     case 'text':
       return {
         ...base,
+        contentType: 'text',
         contentText: msg.text?.body ?? '',
         interactivePayload: null,
       };
@@ -72,6 +77,7 @@ function mapMessage(
       if (inter?.type === 'button_reply' && inter.button_reply?.id) {
         return {
           ...base,
+          contentType: 'interactive',
           contentText: inter.button_reply.title ?? '',
           interactivePayload: {
             type: 'button',
@@ -83,6 +89,7 @@ function mapMessage(
       if (inter?.type === 'list_reply' && inter.list_reply?.id) {
         return {
           ...base,
+          contentType: 'interactive',
           contentText: inter.list_reply.title ?? '',
           interactivePayload: {
             type: 'list',
@@ -94,17 +101,78 @@ function mapMessage(
       return null;
     }
     case 'button':
+      // Razón: el tap de un quick-reply de template se modela como
+      // `template_button` (con contextMessageId del template citado), pero se
+      // SIGUE poblando `interactivePayload` porque es el carrier de routing de
+      // `detectButtonShortcut` (compile.ts) y del resume (pipeline.ts). El
+      // solapamiento del payload es deliberado.
       return {
         ...base,
+        contentType: 'template_button',
         contentText: msg.button?.text ?? '',
+        templateButton: {
+          contextMessageId: msg.context?.id,
+          payload: msg.button?.payload,
+        },
         interactivePayload: msg.button?.payload
           ? { type: 'button', id: msg.button.payload, title: msg.button.text }
           : null,
       };
+    case 'image':
+      return {
+        ...base,
+        contentType: 'image',
+        contentText: msg.image?.caption ?? '',
+        media: mapMedia(msg.image),
+      };
+    case 'audio':
+      // audio no tiene caption en Meta → contentText vacío.
+      return { ...base, contentType: 'audio', contentText: '', media: mapMedia(msg.audio) };
+    case 'video':
+      return {
+        ...base,
+        contentType: 'video',
+        contentText: msg.video?.caption ?? '',
+        media: mapMedia(msg.video),
+      };
+    case 'document':
+      return {
+        ...base,
+        contentType: 'document',
+        contentText: msg.document?.caption ?? '',
+        media: mapMedia(msg.document),
+      };
+    case 'location': {
+      const loc = msg.location;
+      if (loc?.latitude === undefined || loc.longitude === undefined) return null;
+      return {
+        ...base,
+        contentType: 'location',
+        contentText: loc.name ?? loc.address ?? '',
+        location: {
+          latitude: loc.latitude,
+          longitude: loc.longitude,
+          ...(loc.name ? { name: loc.name } : {}),
+          ...(loc.address ? { address: loc.address } : {}),
+        },
+      };
+    }
     default:
-      // image/audio/document/video/location — por ahora no se procesan
+      // statuses/reactions/sticker/unknown — no se procesan.
       return null;
   }
+}
+
+/** Mapea un media object de Meta a `InboundMedia`. `undefined` si no hay id. */
+function mapMedia(m: WhatsAppInboundMedia | undefined): InboundMedia | undefined {
+  if (!m?.id) return undefined;
+  return {
+    id: m.id,
+    ...(m.mime_type ? { mimeType: m.mime_type } : {}),
+    ...(m.caption ? { caption: m.caption } : {}),
+    ...(m.filename ? { filename: m.filename } : {}),
+    ...(m.sha256 ? { sha256: m.sha256 } : {}),
+  };
 }
 
 /**

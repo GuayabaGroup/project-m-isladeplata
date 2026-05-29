@@ -145,9 +145,117 @@ describe('normalizeWhatsAppPayload — non-message events', () => {
     expect(normalizeWhatsAppPayload(payload, 'client')).toEqual([]);
   });
 
-  it('skips image/audio/etc (unsupported types)', () => {
+  it('skips sticker/reaction (unknown types not in the switch)', () => {
     const payload = buildPayload([
-      { from: '54911000000', id: 'wamid.IMG', timestamp: '1764259200', type: 'image' },
+      { from: '54911000000', id: 'wamid.STK', timestamp: '1764259200', type: 'sticker' },
+    ]);
+    expect(normalizeWhatsAppPayload(payload, 'client')).toEqual([]);
+  });
+});
+
+describe('normalizeWhatsAppPayload — template_button', () => {
+  it('captures contextMessageId + payload AND keeps interactivePayload for routing', () => {
+    const payload = buildPayload([
+      {
+        from: '54911000000',
+        id: 'wamid.TPL',
+        timestamp: '1764259200',
+        type: 'button',
+        button: { text: 'Confirmar', payload: 'confirm:appt-9' },
+        context: { id: 'wamid.ORIGINAL_TEMPLATE' },
+      },
+    ]);
+    const result = normalizeWhatsAppPayload(payload, 'client');
+    expect(result[0]).toMatchObject({
+      contentType: 'template_button',
+      contentText: 'Confirmar',
+      templateButton: { contextMessageId: 'wamid.ORIGINAL_TEMPLATE', payload: 'confirm:appt-9' },
+      interactivePayload: { type: 'button', id: 'confirm:appt-9', title: 'Confirmar' },
+    });
+  });
+});
+
+describe('normalizeWhatsAppPayload — media + location', () => {
+  it('maps image: caption → contentText + media carried', () => {
+    const payload = buildPayload([
+      {
+        from: '54911000000',
+        id: 'wamid.IMG',
+        timestamp: '1764259200',
+        type: 'image',
+        image: { id: 'media-1', mime_type: 'image/jpeg', sha256: 'abc', caption: 'mi foto' },
+      },
+    ]);
+    const result = normalizeWhatsAppPayload(payload, 'client');
+    expect(result[0]).toMatchObject({
+      contentType: 'image',
+      contentText: 'mi foto',
+      media: { id: 'media-1', mimeType: 'image/jpeg', caption: 'mi foto', sha256: 'abc' },
+    });
+  });
+
+  it('maps audio: empty contentText (no caption in Meta)', () => {
+    const payload = buildPayload([
+      {
+        from: '54911000000',
+        id: 'wamid.AUD',
+        timestamp: '1764259200',
+        type: 'audio',
+        audio: { id: 'media-2', mime_type: 'audio/ogg' },
+      },
+    ]);
+    const result = normalizeWhatsAppPayload(payload, 'client');
+    expect(result[0]).toMatchObject({
+      contentType: 'audio',
+      contentText: '',
+      media: { id: 'media-2', mimeType: 'audio/ogg' },
+    });
+  });
+
+  it('maps document: filename carried', () => {
+    const payload = buildPayload([
+      {
+        from: '54911000000',
+        id: 'wamid.DOC',
+        timestamp: '1764259200',
+        type: 'document',
+        document: { id: 'media-3', mime_type: 'application/pdf', filename: 'factura.pdf' },
+      },
+    ]);
+    const result = normalizeWhatsAppPayload(payload, 'client');
+    expect(result[0]).toMatchObject({
+      contentType: 'document',
+      media: { id: 'media-3', mimeType: 'application/pdf', filename: 'factura.pdf' },
+    });
+  });
+
+  it('maps location: name → contentText + lat/long carried', () => {
+    const payload = buildPayload([
+      {
+        from: '54911000000',
+        id: 'wamid.LOC',
+        timestamp: '1764259200',
+        type: 'location',
+        location: { latitude: -34.6, longitude: -58.4, name: 'Obelisco' },
+      },
+    ]);
+    const result = normalizeWhatsAppPayload(payload, 'client');
+    expect(result[0]).toMatchObject({
+      contentType: 'location',
+      contentText: 'Obelisco',
+      location: { latitude: -34.6, longitude: -58.4, name: 'Obelisco' },
+    });
+  });
+
+  it('drops a location without coordinates', () => {
+    const payload = buildPayload([
+      {
+        from: '54911000000',
+        id: 'wamid.LOC2',
+        timestamp: '1764259200',
+        type: 'location',
+        location: {},
+      },
     ]);
     expect(normalizeWhatsAppPayload(payload, 'client')).toEqual([]);
   });

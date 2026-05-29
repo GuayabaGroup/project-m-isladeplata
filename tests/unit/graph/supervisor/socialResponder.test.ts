@@ -70,6 +70,7 @@ function makeState(
     channelType: 'whatsapp',
     channelId: '5491100',
     messageId: 'wamid.1',
+    contentType: 'text',
     contentText,
     receivedAt: new Date().toISOString(),
     whatsappChannel: 'client',

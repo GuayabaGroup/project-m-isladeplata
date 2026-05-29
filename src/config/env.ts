@@ -126,6 +126,13 @@ export const envSchema = z
     METRICS_API_KEY: z.string().default(''),
 
     /**
+     * API key que presenta Guacuco (header `X-API-Key`) para el endpoint S2S
+     * `POST /api/v1/outbound/messages`. DEBE coincidir con `IDP_API_KEY` en
+     * Guacuco. Mínimo 16 chars (§13.1.5).
+     */
+    IDP_API_KEY: z.string().min(16),
+
+    /**
      * Dev-only: si `true`, el webhook de WhatsApp NO valida HMAC. Permite
      * trabajar localmente sin configurar `APP_SECRET_BY_PLATFORM_JSON`. El
      * `phone_number_id` sigue siendo obligatorio (debe existir en

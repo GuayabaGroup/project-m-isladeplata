@@ -44,6 +44,7 @@ function makeMessage(
     channelType: 'whatsapp',
     channelId: '54911000000',
     messageId: `wamid.${Math.random()}`,
+    contentType: interactivePayload ? 'interactive' : 'text',
     contentText,
     receivedAt: new Date().toISOString(),
     whatsappChannel: 'client',
@@ -289,6 +290,28 @@ describe('compileGraph (supervisor wiring)', () => {
     expect(result.outcome?.pendingReply?.text).toContain('turnos');
     // 2 calls = classifier + social
     expect(create).toHaveBeenCalledTimes(2);
+  });
+
+  it('media content short-circuits with a canned reply without calling the LLM', async () => {
+    const { llm, create } = makeLlmStub('unused');
+    const { guacuco } = makeGuacuco();
+    const graph = compileGraph({ checkpointer, logger: mockLogger, llm, guacuco });
+
+    const result = await graph.invoke(
+      {
+        input: {
+          channelMessage: { ...makeMessage(''), contentType: 'image' },
+          receivedAt: new Date().toISOString(),
+        },
+        identity: IDENTITY_CLIENT,
+        crmContext: EMPTY_CRM_CONTEXT,
+      },
+      { configurable: { thread_id: 'th-image' } },
+    );
+
+    expect(result.outcome?.action).toBe('response');
+    expect(result.outcome?.pendingReply?.text).toMatch(/solo puedo procesar mensajes de texto/i);
+    expect(create).not.toHaveBeenCalled();
   });
 
   it('thread isolation: different thread_ids produce independent state', async () => {

@@ -35,6 +35,16 @@ export interface WhatsAppInboundValue {
   statuses?: unknown[];
 }
 
+/** Objeto media de Meta Cloud API (image/audio/video/document). */
+export interface WhatsAppInboundMedia {
+  id?: string;
+  mime_type?: string;
+  sha256?: string;
+  caption?: string;
+  /** Solo en `document`. */
+  filename?: string;
+}
+
 export interface WhatsAppInboundMessage {
   from?: string;
   id?: string;
@@ -56,6 +66,13 @@ export interface WhatsAppInboundMessage {
     list_reply?: { id?: string; title?: string; description?: string };
   };
   button?: { text?: string; payload?: string };
+  image?: WhatsAppInboundMedia;
+  audio?: WhatsAppInboundMedia;
+  video?: WhatsAppInboundMedia;
+  document?: WhatsAppInboundMedia;
+  location?: { latitude?: number; longitude?: number; name?: string; address?: string };
+  /** `context.id` referencia el mensaje citado (p.ej. el template tappeado). */
+  context?: { id?: string };
 }
 
 // ============================================================================
@@ -66,7 +83,10 @@ export type WhatsAppOutboundMessage =
   | WhatsAppOutboundText
   | WhatsAppOutboundInteractiveButtons
   | WhatsAppOutboundInteractiveList
-  | WhatsAppOutboundInteractiveCta;
+  | WhatsAppOutboundInteractiveCta
+  | WhatsAppOutboundTemplate
+  | WhatsAppOutboundImage
+  | WhatsAppOutboundDocument;
 
 export interface WhatsAppOutboundBase {
   messaging_product: 'whatsapp';
@@ -117,4 +137,47 @@ export interface WhatsAppOutboundInteractiveCta extends WhatsAppOutboundBase {
       parameters: { display_text: string; url: string };
     };
   };
+}
+
+/**
+ * Mensaje de template (HSM). `components` es opcional — se omite cuando el
+ * template no lleva parámetros de body ni botones. Cada botón quick-reply es
+ * SU PROPIO componente `{ type:'button', sub_type:'quick_reply', index }` con
+ * `index` STRING (Meta lo exige así).
+ *
+ * Ref: https://developers.facebook.com/docs/whatsapp/cloud-api/guides/send-message-templates
+ */
+export interface WhatsAppTemplateBodyComponent {
+  type: 'body';
+  parameters: Array<{ type: 'text'; text: string }>;
+}
+
+export interface WhatsAppTemplateButtonComponent {
+  type: 'button';
+  sub_type: 'quick_reply';
+  index: string;
+  parameters: Array<{ type: 'payload'; payload: string }>;
+}
+
+export type WhatsAppTemplateComponent =
+  | WhatsAppTemplateBodyComponent
+  | WhatsAppTemplateButtonComponent;
+
+export interface WhatsAppOutboundTemplate extends WhatsAppOutboundBase {
+  type: 'template';
+  template: {
+    name: string;
+    language: { code: string };
+    components?: WhatsAppTemplateComponent[];
+  };
+}
+
+export interface WhatsAppOutboundImage extends WhatsAppOutboundBase {
+  type: 'image';
+  image: { link: string; caption?: string };
+}
+
+export interface WhatsAppOutboundDocument extends WhatsAppOutboundBase {
+  type: 'document';
+  document: { link: string; caption?: string; filename?: string };
 }

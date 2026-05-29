@@ -46,6 +46,7 @@ function makeMessage(overrides?: Partial<ChannelMessage>): ChannelMessage {
     channelType: 'whatsapp',
     channelId: '54911000000',
     messageId: 'wamid.ABC',
+    contentType: 'text',
     contentText: 'quiero un turno',
     receivedAt: '2026-05-27T15:30:00Z',
     whatsappChannel: 'client',

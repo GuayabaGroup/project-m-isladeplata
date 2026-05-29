@@ -16,6 +16,7 @@ function baseRawEnv(): Record<string, string> {
     WHATSAPP_VERIFY_TOKEN: 't',
     POSTGRES_URL: 'postgres://x',
     ANTHROPIC_API_KEY: 'test-anthropic-key',
+    IDP_API_KEY: 'test-idp-api-key-1234567890',
   };
 }
 

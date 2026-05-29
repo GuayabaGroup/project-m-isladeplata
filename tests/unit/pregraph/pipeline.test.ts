@@ -36,6 +36,7 @@ function makeMessage(overrides?: Partial<ChannelMessage>): ChannelMessage {
     channelType: 'whatsapp',
     channelId: '54911000000',
     messageId: 'wamid.1',
+    contentType: 'text',
     contentText: 'hola',
     receivedAt: new Date().toISOString(),
     whatsappChannel: 'client',

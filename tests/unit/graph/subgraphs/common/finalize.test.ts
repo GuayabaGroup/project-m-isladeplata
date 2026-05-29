@@ -17,6 +17,7 @@ function inputWith(text: string) {
       channelType: 'whatsapp' as const,
       channelId: 'c',
       messageId: 'm',
+      contentType: 'text' as const,
       contentText: text,
       receivedAt: '2026-05-28T10:00:00Z',
       whatsappChannel: 'client' as const,

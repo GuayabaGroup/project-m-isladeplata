@@ -46,8 +46,8 @@ src/
 │   └── observability/    # Winston logger + Sentry + swallowAsync
 │
 ├── channels/         # Canales de entrada/salida
-│   ├── whatsapp/         # webhook + verify + normalizer + sender + types
-│   ├── ChannelAdapter.ts # contrato común
+│   ├── whatsapp/         # webhook + verify + normalizer + sender + types + WhatsAppInboundAdapter
+│   ├── ChannelAdapter.ts # contratos comunes: MessageProcessor + InboundChannelAdapter (registry)
 │   └── (telegram/, mobile/, web/ — se agregan después sin tocar el grafo)
 │
 ├── clients/          # HTTP clients hacia backends propios
@@ -73,14 +73,18 @@ src/
 │   └── nodes/            # helpers reusables (resolve_entities, format_message…)
 │
 ├── nlg/              # Formateo de respuesta por canal
-│   └── ResponseBuilder.ts # CHANNEL_FORMATS centralizado
+│   ├── ResponseBuilder.ts        # OutboundReply (grafo) → payload, CHANNEL_FORMATS centralizado
+│   └── OutboundMessageBuilder.ts # OutboundMessageDto (API) → payload de canal
+│
+├── outbound/         # Envío proactivo de mensajes (S2S: Guacuco → IDP → canal)
+│   └── OutboundMessageService.ts # orquesta resolución de canal + dedup + sender (recibe sender por inyección)
 │
 ├── security/         # HMAC, sanitización, guardrails
 │
 └── core/             # Tipos puros, enums, errores (NO depende de nada)
-    ├── enums/
+    ├── enums/        # ChannelType, InboundContentType, OutcomeAction, ...
     ├── errors/       # IdpError + subtipos (IdentityNotFound, ToolExecution, RateLimit)
-    └── types/        # ChannelMessage, Identity, CrmContext, Outcome
+    └── types/        # ChannelMessage (contentType+media+location+templateButton), Identity, CrmContext, Outcome, OutboundMessage
 ```
 
 Cada capa tiene un rol claro. **No hay grises**.
@@ -97,7 +101,7 @@ Cada capa tiene un rol claro. **No hay grises**.
   infrastructure      pregraph + graph      security
         ▲                   ▲                   ▲
         │                   │                   │
-        └─ channels / clients / nlg ────────────┘
+        └─ channels / clients / nlg / outbound ─┘
                             ▲
                            main
 ```
@@ -113,7 +117,8 @@ Cada capa tiene un rol claro. **No hay grises**.
 | `graph/` | `core/`, `config/`, `infrastructure/llm/`, `infrastructure/observability/`, `clients/` (por tipo), `security/` | `main/`, `channels/`, `pregraph/`, `nlg/` |
 | `pregraph/` | `core/`, `config/`, `clients/`, `infrastructure/`, `security/`, `graph/` (solo `compile()` y tipos) | `main/`, `channels/` (recibe `ChannelAdapter` por inyección) |
 | `nlg/` | `core/`, `config/` | TODO el resto |
-| `channels/` | `core/`, `config/`, `security/`, `infrastructure/observability/`, `nlg/` (por tipo) | `main/`, `pregraph/`, `graph/` |
+| `outbound/` | `core/`, `config/`, `infrastructure/` (redis, observability), `nlg/` (por tipo) | `main/`, `graph/`, `pregraph/`, `clients/`, `channels/` (directo — recibe `WhatsAppSender` por inyección) |
+| `channels/` | `core/`, `config/`, `security/`, `infrastructure/observability/`, `nlg/` (por tipo) | `main/`, `pregraph/`, `graph/`, `outbound/` |
 | `main/` | TODAS | — |
 
 ### Violaciones prohibidas
@@ -261,7 +266,7 @@ El pre-grafo es **código TS secuencial**, NO un LangGraph. Razón: los pasos qu
 ### 7.1 — Los 10 pasos (orden estricto)
 
 1. **Verify signature** — HMAC WA / secret token TG vía `validateWebhookSignature` (timing-safe).
-2. **Normalize** — payload externo → `ChannelMessage`. Por canal.
+2. **Normalize** — payload externo → `ChannelMessage` (con `contentType` requerido; media/location se transportan, no se dropean). Por canal, vía el `InboundChannelAdapter` del canal.
 3. **Dedup** — Redis `SET NX` con TTL 300s, key `dedup:{channel}:{messageId}`. Duplicate → 200 OK + log + return.
 4. **Identity resolve** — Guacuco `POST /identity/resolve` con `(channelType, channelId, phoneNumberId)`. Output incluye business_allia_id, profileType, helpersLists (catálogo), welcomeMessage/onboardingUrl si `isNewUser`.
 5. **Rate limit** — Redis incr+expire (20 msg/min default), TTL 60s, key derivada de identity. Throttled → respuesta corta determinística, NO entra al grafo.
@@ -315,7 +320,7 @@ GraphState = {
 | `routing.activeSubgraph` | supervisor | Único nodo que decide a qué subgrafo se rutea |
 | `routing.handoff` | supervisor o subgrafo activo (al abdicar) | Razón documentada |
 | `subgraphState` | el subgrafo activo, en sus propios nodos | Cada subgrafo define su shape tipado |
-| `outcome` | subgrafo activo al cerrar / supervisor en fast-paths | Discriminated union |
+| `outcome` | subgrafo activo al cerrar / supervisor en fast-paths | Discriminated union. Fast-paths incluyen el canned reply de contenido no soportado (`unsupportedContent.ts`) |
 
 **Enforzar tipográficamente con channels y reducers de LangGraph.** Si un nodo intenta mutar un campo que no le pertenece, debe fallar en compile time.
 
@@ -477,8 +482,15 @@ Cada canal en `channels/{name}/`:
 - `normalizer.ts` — payload externo → `ChannelMessage`
 - `sender.ts` — `ChannelMessage` → API externa
 - `types.ts` — tipos del payload externo
+- `{Name}InboundAdapter.ts` — implementa `InboundChannelAdapter` (monta sus rutas + body-parser propio)
 
 NUNCA mezclar lógica entre canales. Si dos canales necesitan lo mismo → `ChannelAdapter.ts` o `core/`.
+
+`channels/ChannelAdapter.ts` define dos contratos: `MessageProcessor` (canal → pipeline) e `InboundChannelAdapter` (canal → Express: `{ channelType; register(app, processor) }`).
+
+### 12.1.1 — `ChannelMessage` estandarizado (entrante)
+
+Todo mensaje entrante se normaliza a un `ChannelMessage` con un discriminador `contentType` REQUERIDO (`core/enums/InboundContentType.ts`: `text | interactive | template_button | image | audio | video | document | location`). El normalizer DEBE setearlo en toda rama; `contentText` es el texto humano canónico para todo tipo (caption en media, name/address en location). Payloads estructurados opcionales: `media` (image/audio/video/document), `location`, `templateButton` (`contextMessageId` + `payload`; solapa a propósito con `interactivePayload`, que sigue siendo el carrier de routing de `detectButtonShortcut`/resume). Contenido no procesable (media/location) NO se dropea: se transporta y el supervisor responde un canned reply sin LLM (ver §8.2 / `graph/supervisor/unsupportedContent.ts`).
 
 ### 12.2 — Multi-Platform WhatsApp (dual cliente/staff)
 
@@ -498,8 +510,8 @@ WhatsApp tiene un `phone_number_id` por **(plataforma, rol)** (heredado de IDP v
 
 El grafo NO conoce el canal de origen. `state.identity.channel` es informativo y se usa solo en `ResponseBuilder` y para el `thread_id`. Para agregar Telegram/web/mobile basta:
 
-1. Crear `channels/{nuevo}/` con webhook + normalizer + sender.
-2. Agregar entrada al `ChannelAdapter`.
+1. Crear `channels/{nuevo}/` con normalizer + sender + un `{Nuevo}InboundAdapter` que implemente `InboundChannelAdapter`.
+2. Push del adapter al array `inboundChannels` en `bootstrap.ts` (lo demás lo itera `registerRoutes`).
 3. (Opcional) extender `ResponseBuilder` con formato específico.
 4. **El grafo no se toca.**
 

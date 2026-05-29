@@ -1,8 +1,9 @@
 import cors from 'cors';
 import express, { type Express } from 'express';
 import helmet from 'helmet';
+import { createWhatsAppInboundAdapter } from '../channels/whatsapp/WhatsAppInboundAdapter.js';
+import { createOutboundHttpHandler } from '../channels/whatsapp/outboundHttpHandler.js';
 import { WhatsAppSender } from '../channels/whatsapp/sender.js';
-import { createWhatsAppWebhookHandler } from '../channels/whatsapp/webhook.js';
 import { GuacucoClient } from '../clients/GuacucoClient.js';
 import { ParguitoClient } from '../clients/ParguitoClient.js';
 import { env } from '../config/env.js';
@@ -27,7 +28,9 @@ import {
   quitRedis,
 } from '../infrastructure/redis/RedisConnection.js';
 import { initLangSmith } from '../infrastructure/tracing/langsmith.js';
+import { OutboundMessageBuilder } from '../nlg/OutboundMessageBuilder.js';
 import { ResponseBuilder } from '../nlg/ResponseBuilder.js';
+import { OutboundMessageService } from '../outbound/OutboundMessageService.js';
 import { ConversationPersister } from '../pregraph/ConversationPersister.js';
 import { ResponseDispatcher } from '../pregraph/ResponseDispatcher.js';
 import { ThreadResolver } from '../pregraph/ThreadResolver.js';
@@ -101,6 +104,17 @@ export async function bootstrap(): Promise<BootstrappedApp> {
   const responseBuilder = new ResponseBuilder(logger);
   const dispatcher = new ResponseDispatcher(responseBuilder, whatsappSender, logger);
 
+  // Outbound S2S (Guacuco → IDP → WhatsApp). Reusa el `dedup` ya construido
+  // para idempotencia opcional y el `whatsappSender` por inyección.
+  const outboundBuilder = new OutboundMessageBuilder(responseBuilder);
+  const outboundService = new OutboundMessageService({
+    builder: outboundBuilder,
+    sender: whatsappSender,
+    dedup,
+    logger,
+  });
+  const outboundMessagesHandler = createOutboundHttpHandler(outboundService, logger);
+
   const llm = createLlmProvider(env, logger);
 
   const threadResolver = new ThreadResolver(checkpointer, logger);
@@ -120,7 +134,7 @@ export async function bootstrap(): Promise<BootstrappedApp> {
     logger,
   });
 
-  const whatsappWebhook = createWhatsAppWebhookHandler({ processor: pipeline, logger });
+  const whatsappInbound = createWhatsAppInboundAdapter(logger);
 
   const app = express();
   app.use(helmet());
@@ -154,7 +168,12 @@ export async function bootstrap(): Promise<BootstrappedApp> {
     logger.info('Metrics endpoint disabled (METRICS_API_KEY empty)');
   }
 
-  registerRoutes(app, { whatsappWebhook, ...(metricsHandler ? { metricsHandler } : {}) });
+  registerRoutes(app, {
+    inboundChannels: [whatsappInbound],
+    processor: pipeline,
+    outboundMessagesHandler,
+    ...(metricsHandler ? { metricsHandler } : {}),
+  });
   app.use(errorHandler);
 
   async function cleanup(): Promise<void> {

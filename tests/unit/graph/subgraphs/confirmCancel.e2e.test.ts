@@ -52,6 +52,7 @@ function makeMessage(
     channelType: 'whatsapp',
     channelId: '5491100',
     messageId: `wamid.${Math.random().toString(36).slice(2)}`,
+    contentType: interactivePayload ? 'interactive' : 'text',
     contentText,
     receivedAt: new Date().toISOString(),
     whatsappChannel: 'client',

@@ -69,3 +69,6 @@ process.env.QUERY_JUDGE_FAIL_MODE = process.env.QUERY_JUDGE_FAIL_MODE ?? 'fail-o
 // Metrics (H8.2) — vacío en tests para no exponer endpoint por default.
 // Tests específicos del endpoint setean el valor antes de instanciar el handler.
 process.env.METRICS_API_KEY = process.env.METRICS_API_KEY ?? '';
+
+// Outbound S2S — IDP_API_KEY es required (min 16 chars) en env.ts.
+process.env.IDP_API_KEY = process.env.IDP_API_KEY ?? 'test-idp-api-key-1234567890';
