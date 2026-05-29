@@ -1,5 +1,6 @@
 import type { Logger } from 'winston';
 import { SOCIAL_CONFIG } from '../../config/llm.config.js';
+import { buildPersona, toPersonaContext } from '../../config/personality/buildPersona.js';
 import type { Outcome } from '../../core/types/Outcome.js';
 import type { LlmProvider } from '../../infrastructure/llm/LlmProvider.js';
 import { sanitizeUserInput } from '../../security/sanitize.js';
@@ -19,12 +20,6 @@ export interface SocialDeps {
   logger: Logger;
 }
 
-const PLATFORM_NAME_BY_ID: ReadonlyMap<number, string> = new Map([
-  [1, 'Allia'],
-  [2, 'Groomia'],
-  [3, 'Divapp'],
-]);
-
 const FALLBACK_BY_TYPE: Record<MessageType, string> = {
   greeting: '¡Hola! ¿En qué te puedo ayudar?',
   farewell: '¡Hasta luego! Cualquier cosa estoy por acá.',
@@ -39,12 +34,11 @@ export function makeSocialResponderNode(deps: SocialDeps) {
   return async function socialResponder(state: GraphState): Promise<GraphStateUpdate> {
     const messageType: MessageType = state.routing?.messageType ?? 'oos';
     const text = sanitizeUserInput(state.input?.channelMessage?.contentText);
-    const businessName = state.identity?.tenantName ?? 'el negocio';
-    const platformName = state.identity?.platformId
-      ? (PLATFORM_NAME_BY_ID.get(state.identity.platformId) ?? 'la plataforma')
-      : 'la plataforma';
 
-    const system = buildSystemPrompt(messageType, businessName, platformName);
+    const persona = state.identity
+      ? buildPersona(toPersonaContext(state.identity), { aiIdentityDisclosure: true })
+      : '';
+    const system = buildSystemPrompt(messageType, persona);
     const userTurn = text.length > 0 ? text : '[mensaje vacío]';
 
     const response = await llm.complete({
@@ -68,21 +62,27 @@ export function makeSocialResponderNode(deps: SocialDeps) {
   };
 }
 
-function buildSystemPrompt(
-  messageType: MessageType,
-  businessName: string,
-  platformName: string,
-): string {
-  const intro = `Sos un agente de atención al cliente para ${businessName} (${platformName}). Respondé en máximo 2 oraciones, tono amable, conciso, sin emojis.`;
+/**
+ * Instrucción de tarea por tipo de mensaje. La VOZ (persona de marca, nombre
+ * del asistente, identidad del negocio, acento) la define el bloque de persona
+ * que se antepone; aquí solo va el objetivo del turno + restricción de largo.
+ */
+const TASK_BY_TYPE: Record<MessageType, string> = {
+  greeting:
+    'El usuario te saluda — devolvé un saludo cálido y ofrecé ayudar con turnos o consultas. Máximo 2 oraciones.',
+  farewell:
+    'El usuario se despide — saludalo y dejá la puerta abierta para volver. Máximo 2 oraciones.',
+  oos: 'El usuario habla de algo fuera de tu scope (turnos, consultas, reservas). Redirigílo gentilmente sin ser cortante. NO digas "no puedo ayudarte" sin ofrecer alternativa. Máximo 2 oraciones.',
+  action:
+    'No quedó claro qué pide el usuario. Pedile que reformule, ofreciendo ayudar con turnos o consultas. Máximo 2 oraciones.',
+  query:
+    'No quedó claro qué información necesita el usuario. Pedile que reformule, ofreciendo ayudar con turnos o consultas. Máximo 2 oraciones.',
+};
 
-  switch (messageType) {
-    case 'greeting':
-      return `${intro} El usuario te saluda — devolvé un saludo cálido y ofrecé ayudar con turnos o consultas.`;
-    case 'farewell':
-      return `${intro} El usuario se despide — saludalo y dejá la puerta abierta para volver.`;
-    case 'oos':
-      return `${intro} El usuario habla de algo fuera de tu scope (turnos, consultas, reservas). Redirigílo gentilmente sin ser cortante. NO digas "no puedo ayudarte" sin ofrecer alternativa.`;
-    default:
-      return `${intro} No quedó claro qué pide el usuario. Pedile que reformule, ofreciendo ayudar con turnos o consultas.`;
-  }
+function buildSystemPrompt(messageType: MessageType, persona: string): string {
+  const task = TASK_BY_TYPE[messageType] ?? TASK_BY_TYPE.oos;
+  const fallbackIntro =
+    'Sos el asistente virtual de atención al cliente del negocio. Respondé amable y conciso, en español.';
+  const preamble = persona.length > 0 ? persona : fallbackIntro;
+  return `${preamble}\n\n${task}`;
 }

@@ -1,5 +1,7 @@
 import type { Logger } from 'winston';
 import { RESPONSE_CONFIG } from '../../../../config/llm.config.js';
+import { buildPersona, toPersonaContext } from '../../../../config/personality/buildPersona.js';
+import type { Identity } from '../../../../core/types/Identity.js';
 import type { Outcome } from '../../../../core/types/Outcome.js';
 import type { LlmProvider } from '../../../../infrastructure/llm/LlmProvider.js';
 import type { RescheduleDraftState } from '../state.js';
@@ -14,8 +16,8 @@ export interface RescheduleSuccessDeps {
   logger: Logger;
 }
 
-const SYSTEM_PROMPT =
-  'Sos un agente de atención al cliente. El usuario acaba de reagendar un turno. Generá UN mensaje corto (máx 2 oraciones) confirmando el cambio con la nueva fecha+hora. Tono amable. NO inventes datos. NO menciones códigos.';
+const TASK_PROMPT =
+  'El usuario acaba de reagendar un turno. Generá UN mensaje corto (máx 2 oraciones) confirmando el cambio con la nueva fecha+hora. NO inventes datos. NO menciones códigos.';
 
 const SPANISH_MONTHS = [
   'enero',
@@ -42,6 +44,7 @@ export function makeRescheduleSuccessNode(deps: RescheduleSuccessDeps) {
   const { llm, logger } = deps;
 
   return async function successResponse(state: {
+    identity?: Identity;
     subgraphState?: unknown;
   }): Promise<Partial<RescheduleDraftState>> {
     const current = state.subgraphState as RescheduleDraftState | undefined;
@@ -55,10 +58,13 @@ export function makeRescheduleSuccessNode(deps: RescheduleSuccessDeps) {
 
     const userPrompt = `Turno reagendado: ${displayName}. Nueva fecha: ${formattedDate} a las ${timePart}. Generá el mensaje al cliente.`;
 
+    const persona = state.identity ? buildPersona(toPersonaContext(state.identity)) : '';
+    const system = persona ? `${persona}\n\n${TASK_PROMPT}` : TASK_PROMPT;
+
     const response = await llm.complete({
       ...RESPONSE_CONFIG,
       maxTokens: 100,
-      system: SYSTEM_PROMPT,
+      system,
       messages: [{ role: 'user', content: userPrompt }],
     });
 

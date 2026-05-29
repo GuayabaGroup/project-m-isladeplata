@@ -1,6 +1,8 @@
 import type { BaseMessage } from '@langchain/core/messages';
 import type { Logger } from 'winston';
 import { RESPONSE_CONFIG } from '../../../../config/llm.config.js';
+import { buildPersona, toPersonaContext } from '../../../../config/personality/buildPersona.js';
+import type { Identity } from '../../../../core/types/Identity.js';
 import type { Outcome } from '../../../../core/types/Outcome.js';
 import type { LlmProvider } from '../../../../infrastructure/llm/LlmProvider.js';
 import { type ConversationTurn, buildConversationHistory } from '../conversationHistory.js';
@@ -28,17 +30,19 @@ export interface SynthesizeResponseDeps {
 
 const RAW_RESULT_CHAR_CAP = 2000;
 
-const SYSTEM_PROMPT = `Sos un agente de atención al cliente para un negocio de turnos.
-El usuario hizo una pregunta. Te paso los datos (en JSON) y la pregunta original.
+const SYNTH_TASK = `El usuario hizo una pregunta. Te paso los datos (en JSON) y la pregunta original.
 
 Reglas:
-- Respondé en máximo 3 oraciones, tono amable, estilo WhatsApp.
+- Respondé en máximo 3 oraciones, estilo WhatsApp.
 - Si la lista es larga, mencioná los primeros 5 con "y X más".
 - Si la data está vacía o no contiene info útil, degradá amablemente
   ("Aún no hay servicios cargados", "No tenés turnos próximos", etc.).
 - NO inventes precios ni datos que no estén en el JSON.
 - NO menciones UUIDs ni códigos internos.
 - NO menciones la palabra "JSON" ni "data" en tu respuesta.`;
+
+const CANNOT_ANSWER_TASK =
+  'El usuario hizo una pregunta que no podés responder con los datos disponibles. Devolvé UN mensaje corto (máx 2 oraciones) explicando amablemente que no podés ayudar con eso pero que podés con precios, servicios o sus turnos próximos.';
 
 const CANNOT_ANSWER_FALLBACK =
   'No estoy seguro de poder responder eso. Si querés, podés preguntarme por precios, servicios o tus próximos turnos.';
@@ -47,6 +51,7 @@ export function makeSynthesizeResponseNode(deps: SynthesizeResponseDeps) {
   const { llm, logger, judge } = deps;
 
   return async function synthesizeResponse(state: {
+    identity?: Identity;
     subgraphState?: unknown;
     messages?: BaseMessage[];
   }): Promise<Partial<QueryDraftState>> {
@@ -54,13 +59,17 @@ export function makeSynthesizeResponseNode(deps: SynthesizeResponseDeps) {
     if (!current) return {};
     const history = buildConversationHistory(state.messages);
 
+    const persona = state.identity
+      ? buildPersona(toPersonaContext(state.identity), { aiIdentityDisclosure: true })
+      : '';
+    const synthSystem = persona ? `${persona}\n\n${SYNTH_TASK}` : SYNTH_TASK;
+
     // Branch 1: cannot_answer (classifier no encontró intent válido).
     if (current.intent === 'cannot_answer') {
       const response = await llm.complete({
         ...RESPONSE_CONFIG,
         maxTokens: 100,
-        system:
-          'Sos un agente de atención al cliente. El usuario hizo una pregunta que no podés responder con los datos disponibles. Devolvé UN mensaje corto (máx 2 oraciones) explicando amablemente que no podés ayudar con eso pero que podés con precios, servicios o sus turnos próximos.',
+        system: persona ? `${persona}\n\n${CANNOT_ANSWER_TASK}` : CANNOT_ANSWER_TASK,
         messages: [{ role: 'user', content: current.userText.slice(0, 500) }],
       });
       const text = response.text.length > 0 ? response.text : CANNOT_ANSWER_FALLBACK;
@@ -90,7 +99,7 @@ export function makeSynthesizeResponseNode(deps: SynthesizeResponseDeps) {
     const rawJson = safeStringify(current.rawResult).slice(0, RAW_RESULT_CHAR_CAP);
 
     // Síntesis intento 1 (con historial para anáforas: "¿y la próxima?").
-    const first = await synthOnce(llm, current.userText, rawJson, history);
+    const first = await synthOnce(llm, synthSystem, current.userText, rawJson, history);
     let text = first.length > 0 ? first : deterministicFallback(current);
 
     // Judge de síntesis — solo freeform_sql con rows reales + sql. Valida que la
@@ -112,7 +121,7 @@ export function makeSynthesizeResponseNode(deps: SynthesizeResponseDeps) {
           reason: verdict.reason,
           critiquePreview: verdict.critique.slice(0, 160),
         });
-        const retry = await synthOnce(llm, current.userText, rawJson, history, {
+        const retry = await synthOnce(llm, synthSystem, current.userText, rawJson, history, {
           previousSynthesis: first,
           critique: verdict.critique,
         });
@@ -158,9 +167,11 @@ function historyBlock(history: ConversationTurn[] | undefined): string {
   return `\n\nHistorial reciente (para interpretar preguntas de seguimiento):\n${lines}`;
 }
 
-/** Una llamada de síntesis. Retorna '' si el LLM falla (caller decide fallback). */
+/** Una llamada de síntesis. Retorna '' si el LLM falla (caller decide fallback).
+ *  `system` ya viene compuesto con la persona + la tarea de síntesis. */
 async function synthOnce(
   llm: LlmProvider,
+  system: string,
   userText: string,
   rawJson: string,
   history: ConversationTurn[] | undefined,
@@ -173,7 +184,7 @@ async function synthOnce(
   const response = await llm.complete({
     ...RESPONSE_CONFIG,
     maxTokens: 200,
-    system: SYSTEM_PROMPT,
+    system,
     messages: [{ role: 'user', content: userPrompt }],
   });
   return response.text;

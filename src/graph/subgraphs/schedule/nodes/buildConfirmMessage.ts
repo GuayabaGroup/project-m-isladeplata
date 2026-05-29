@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import type { Logger } from 'winston';
 import { SUPERVISOR_CONFIG } from '../../../../config/llm.config.js';
+import { buildPersona, toPersonaContext } from '../../../../config/personality/buildPersona.js';
 import type { CatalogState } from '../../../../core/types/Catalog.js';
+import type { Identity } from '../../../../core/types/Identity.js';
 import type { LlmProvider } from '../../../../infrastructure/llm/LlmProvider.js';
 import type { AppointmentDraftState } from '../state.js';
 
@@ -26,7 +28,7 @@ export interface BuildConfirmMessageDeps {
   logger: Logger;
 }
 
-const SYSTEM_PROMPT = `Sos un agente de atención al cliente que confirma turnos. Recibís un resumen del turno propuesto. Generá UN mensaje confirmatorio en español, máximo 2 oraciones, tono amable, conciso, terminando con "¿Confirmás?" o equivalente. NO inventes datos: usá SOLO lo que te paso. NO menciones UUIDs ni códigos internos.`;
+const TASK_PROMPT = `Tu tarea: confirmar un turno. Recibís un resumen del turno propuesto. Generá UN mensaje confirmatorio, máximo 2 oraciones, terminando con "¿Confirmás?" o equivalente. NO inventes datos: usá SOLO lo que te paso. NO menciones UUIDs ni códigos internos.`;
 
 const FALLBACK_MESSAGE = '¿Confirmás el turno?';
 
@@ -34,6 +36,7 @@ export function makeBuildConfirmMessageNode(deps: BuildConfirmMessageDeps) {
   const { llm, logger } = deps;
 
   return async function buildConfirmMessage(state: {
+    identity?: Identity;
     catalog?: CatalogState;
     subgraphState?: AppointmentDraftState;
   }): Promise<Partial<AppointmentDraftState>> {
@@ -60,11 +63,14 @@ export function makeBuildConfirmMessageNode(deps: BuildConfirmMessageDeps) {
 
 Generá el mensaje confirmatorio.`;
 
+    const persona = state.identity ? buildPersona(toPersonaContext(state.identity)) : '';
+    const system = persona ? `${persona}\n\n${TASK_PROMPT}` : TASK_PROMPT;
+
     const response = await llm.complete({
       ...SUPERVISOR_CONFIG,
       maxTokens: 160,
       temperature: 0.3,
-      system: SYSTEM_PROMPT,
+      system,
       messages: [{ role: 'user', content: userPrompt }],
     });
 

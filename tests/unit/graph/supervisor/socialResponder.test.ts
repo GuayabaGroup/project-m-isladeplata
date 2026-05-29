@@ -99,13 +99,15 @@ describe('socialResponder node', () => {
     expect(create).toHaveBeenCalledOnce();
   });
 
-  it('injects business name into system prompt', async () => {
+  it('injects business name and brand persona into system prompt', async () => {
     const { llm, create } = makeProvider('Hi');
     const node = makeSocialResponderNode({ llm, logger: mockLogger });
     await node(makeState('hola', 'greeting'));
     const params = create.mock.calls[0]?.[0];
+    // Business name is the entity shown to the user...
     expect(params?.system).toContain('Estética Norte');
-    expect(params?.system).toContain('Allia');
+    // ...and the resolved assistant name for platform 1 (Allia) is Ally.
+    expect(params?.system).toContain('Ally');
   });
 
   it('uses farewell-specific prompt for messageType=farewell', async () => {
@@ -142,13 +144,14 @@ describe('socialResponder node', () => {
     expect(params?.messages?.[0]?.role).toBe('user');
   });
 
-  it('uses generic platform name when platformId is unknown', async () => {
+  it('falls back to Allia persona (Ally) when platformId is unknown', async () => {
     const { llm, create } = makeProvider('OK');
     const node = makeSocialResponderNode({ llm, logger: mockLogger });
     const state = makeState('hola', 'greeting');
     state.identity = { ...IDENTITY, platformId: 99 };
     await node(state);
     const params = create.mock.calls[0]?.[0];
-    expect(params?.system).toContain('la plataforma');
+    expect(params?.system).toContain('Ally');
+    expect(params?.system).toContain('Estética Norte');
   });
 });

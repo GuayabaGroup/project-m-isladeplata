@@ -14,4 +14,15 @@ export interface Identity {
   channel: ChannelType;
   roleId?: number;
   timezone: string;
+  /** Nombre personalizado del asistente para este tenant
+   * (`businessStaffRoles.agent_name`). Opcional: si es `null`/ausente se usa
+   * el nombre por defecto de la plataforma (Ally/Groomy/Divy). Lo consume la
+   * capa de personalidad (`config/personality`) para resolver el nombre del
+   * asistente en las respuestas al usuario. */
+  agentName?: string | null;
+  /** Código ISO alpha-3 del país del negocio
+   * (`businessStaffRoles.business_country_code`). Opcional. Determina el
+   * acento/dialecto del español en las respuestas (voseo/tuteo, vocabulario
+   * regional). `null`/ausente → español latinoamericano neutro. */
+  countryCode?: string | null;
 }

@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type { Logger } from 'winston';
 import { SUPERVISOR_CONFIG } from '../../../../config/llm.config.js';
+import { buildPersona, toPersonaContext } from '../../../../config/personality/buildPersona.js';
+import type { Identity } from '../../../../core/types/Identity.js';
 import type { LlmProvider } from '../../../../infrastructure/llm/LlmProvider.js';
 import type { RescheduleDraftState } from '../state.js';
 
@@ -18,8 +20,8 @@ export interface RescheduleBuildConfirmDeps {
   logger: Logger;
 }
 
-const SYSTEM_PROMPT =
-  'Sos un agente de atención al cliente. El usuario quiere REAGENDAR un turno (cambiar la fecha/hora). Generá UN mensaje (máx 2 oraciones) confirmando el cambio. Mencioná el turno original y la nueva fecha+hora. Terminá con "¿Confirmás?" o equivalente. NO inventes datos.';
+const TASK_PROMPT =
+  'El usuario quiere REAGENDAR un turno (cambiar la fecha/hora). Generá UN mensaje (máx 2 oraciones) confirmando el cambio. Mencioná el turno original y la nueva fecha+hora. Terminá con "¿Confirmás?" o equivalente. NO inventes datos.';
 
 const FALLBACK_TEMPLATE = (displayName: string, newDate: string, newTime: string) =>
   `Voy a reagendar "${displayName}" al ${formatDate(newDate)} a las ${newTime}. ¿Confirmás?`;
@@ -49,6 +51,7 @@ export function makeRescheduleBuildConfirmMessageNode(deps: RescheduleBuildConfi
   const { llm, logger } = deps;
 
   return async function buildConfirm(state: {
+    identity?: Identity;
     subgraphState?: unknown;
   }): Promise<Partial<RescheduleDraftState>> {
     const current = state.subgraphState as RescheduleDraftState | undefined;
@@ -74,11 +77,14 @@ export function makeRescheduleBuildConfirmMessageNode(deps: RescheduleBuildConfi
 
     const userPrompt = `Turno original: ${displayName}.\nNueva fecha: ${formatDate(newDate.value)} a las ${newTime.value}.\n\nGenerá el mensaje de confirmación.`;
 
+    const persona = state.identity ? buildPersona(toPersonaContext(state.identity)) : '';
+    const system = persona ? `${persona}\n\n${TASK_PROMPT}` : TASK_PROMPT;
+
     const response = await llm.complete({
       ...SUPERVISOR_CONFIG,
       maxTokens: 120,
       temperature: 0.3,
-      system: SYSTEM_PROMPT,
+      system,
       messages: [{ role: 'user', content: userPrompt }],
     });
 

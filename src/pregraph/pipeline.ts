@@ -357,6 +357,12 @@ function toInternalIdentityOrNull(
     ...(identity.businessStaffRoles?.role_id
       ? { roleId: identity.businessStaffRoles.role_id }
       : {}),
+    ...(identity.businessStaffRoles?.agent_name
+      ? { agentName: identity.businessStaffRoles.agent_name }
+      : {}),
+    ...(identity.businessStaffRoles?.business_country_code
+      ? { countryCode: identity.businessStaffRoles.business_country_code }
+      : {}),
   };
 }
 

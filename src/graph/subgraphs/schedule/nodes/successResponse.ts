@@ -1,5 +1,7 @@
 import type { Logger } from 'winston';
 import { RESPONSE_CONFIG } from '../../../../config/llm.config.js';
+import { buildPersona, toPersonaContext } from '../../../../config/personality/buildPersona.js';
+import type { Identity } from '../../../../core/types/Identity.js';
 import type { Outcome } from '../../../../core/types/Outcome.js';
 import type { LlmProvider } from '../../../../infrastructure/llm/LlmProvider.js';
 import type { AppointmentDraftState } from '../state.js';
@@ -20,13 +22,14 @@ export interface SuccessResponseDeps {
   logger: Logger;
 }
 
-const SYSTEM_PROMPT =
-  'Sos un agente de atención al cliente. El turno se acaba de agendar correctamente. Generá UN mensaje de confirmación cálido, máximo 2 oraciones, en español. Mencioná servicio + persona + día + hora. NO inventes datos. NO menciones códigos internos.';
+const TASK_PROMPT =
+  'El turno se acaba de agendar correctamente. Generá UN mensaje de confirmación, máximo 2 oraciones. Mencioná servicio + persona + día + hora. NO inventes datos. NO menciones códigos internos.';
 
 export function makeSuccessResponseNode(deps: SuccessResponseDeps) {
   const { llm, logger } = deps;
 
   return async function successResponse(state: {
+    identity?: Identity;
     subgraphState?: AppointmentDraftState;
   }): Promise<Partial<AppointmentDraftState>> {
     const current = state.subgraphState;
@@ -60,10 +63,13 @@ export function makeSuccessResponseNode(deps: SuccessResponseDeps) {
 
 Generá el mensaje de confirmación al cliente.`;
 
+    const persona = state.identity ? buildPersona(toPersonaContext(state.identity)) : '';
+    const system = persona ? `${persona}\n\n${TASK_PROMPT}` : TASK_PROMPT;
+
     const response = await llm.complete({
       ...RESPONSE_CONFIG,
       maxTokens: 120,
-      system: SYSTEM_PROMPT,
+      system,
       messages: [{ role: 'user', content: userPrompt }],
     });
 

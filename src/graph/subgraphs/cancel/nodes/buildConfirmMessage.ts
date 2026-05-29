@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type { Logger } from 'winston';
 import { SUPERVISOR_CONFIG } from '../../../../config/llm.config.js';
+import { buildPersona, toPersonaContext } from '../../../../config/personality/buildPersona.js';
+import type { Identity } from '../../../../core/types/Identity.js';
 import type { LlmProvider } from '../../../../infrastructure/llm/LlmProvider.js';
 import type { CancelDraftState } from '../state.js';
 
@@ -17,8 +19,8 @@ export interface CancelBuildConfirmDeps {
   logger: Logger;
 }
 
-const SYSTEM_PROMPT =
-  'Sos un agente de atención al cliente. El usuario quiere CANCELAR un turno. Generá UN mensaje (máx 2 oraciones) confirmando explícitamente la cancelación. Tono cuidadoso (es destructivo). Terminá con "¿Cancelo?" o equivalente. NO inventes datos.';
+const TASK_PROMPT =
+  'El usuario quiere CANCELAR un turno. Generá UN mensaje (máx 2 oraciones) confirmando explícitamente la cancelación. Tono cuidadoso (es una acción destructiva). Terminá con "¿Cancelo?" o equivalente. NO inventes datos.';
 
 const FALLBACK_TEMPLATE = (displayName: string) =>
   `Voy a cancelar: ${displayName}. ¿Confirmás la cancelación?`;
@@ -27,6 +29,7 @@ export function makeCancelBuildConfirmMessageNode(deps: CancelBuildConfirmDeps) 
   const { llm, logger } = deps;
 
   return async function buildConfirm(state: {
+    identity?: Identity;
     subgraphState?: unknown;
   }): Promise<Partial<CancelDraftState>> {
     const current = state.subgraphState as CancelDraftState | undefined;
@@ -46,11 +49,14 @@ export function makeCancelBuildConfirmMessageNode(deps: CancelBuildConfirmDeps) 
 
     const userPrompt = `Turno a cancelar: ${displayName}.\n\nGenerá el mensaje de confirmación.`;
 
+    const persona = state.identity ? buildPersona(toPersonaContext(state.identity)) : '';
+    const system = persona ? `${persona}\n\n${TASK_PROMPT}` : TASK_PROMPT;
+
     const response = await llm.complete({
       ...SUPERVISOR_CONFIG,
       maxTokens: 120,
       temperature: 0.3,
-      system: SYSTEM_PROMPT,
+      system,
       messages: [{ role: 'user', content: userPrompt }],
     });
 
