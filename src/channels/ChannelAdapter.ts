@@ -1,16 +1,10 @@
 import type { Express } from 'express';
 import type { ChannelType } from '../core/enums/ChannelType.js';
-import type { ChannelMessage } from '../core/types/ChannelMessage.js';
-import type { Outcome } from '../core/types/Outcome.js';
+import type { MessageProcessor } from '../core/types/MessageProcessor.js';
 
-/**
- * Contract that any inbound channel hands to the pre-graph pipeline.
- * The channel adapter does not know what `process` does — just calls it
- * with a normalized `ChannelMessage` and dispatches the resulting `Outcome`.
- */
-export interface MessageProcessor {
-  process(message: ChannelMessage): Promise<Outcome>;
-}
+// `MessageProcessor` vive en `core/` (tipo puro, no depende de Express). Se
+// re-exporta acá para no romper los importadores del lado canal.
+export type { MessageProcessor } from '../core/types/MessageProcessor.js';
 
 /**
  * Contrato de montaje de un canal de entrada. Cada canal monta SUS rutas

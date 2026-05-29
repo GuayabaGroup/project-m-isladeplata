@@ -1,7 +1,6 @@
 import { Command } from '@langchain/langgraph';
 import * as Sentry from '@sentry/node';
 import type { Logger } from 'winston';
-import type { MessageProcessor } from '../channels/ChannelAdapter.js';
 import type { GuacucoClient } from '../clients/GuacucoClient.js';
 import type { ParguitoClient } from '../clients/ParguitoClient.js';
 import type { HelpersListEntry, ResolveIdentityOutput } from '../clients/types/GuacucoTypes.js';
@@ -16,6 +15,7 @@ import {
   type UpcomingAppointment,
 } from '../core/types/CrmContext.js';
 import type { Identity } from '../core/types/Identity.js';
+import type { MessageProcessor } from '../core/types/MessageProcessor.js';
 import type { Outcome } from '../core/types/Outcome.js';
 import type { RecentTemplate } from '../core/types/RecentTemplate.js';
 import type { CompiledGraph } from '../graph/compile.js';

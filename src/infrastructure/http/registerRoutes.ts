@@ -1,6 +1,10 @@
 import express, { type Express, type RequestHandler } from 'express';
-import type { InboundChannelAdapter, MessageProcessor } from '../../channels/ChannelAdapter.js';
+// Razón (§2): `InboundChannelAdapter` depende de `Express` y por eso NO puede
+// vivir en `core/` (§12.6) — se importa de `channels/` aunque esta capa sea
+// `infrastructure/`. `MessageProcessor` (tipo puro) sí vive en `core/`.
+import type { InboundChannelAdapter } from '../../channels/ChannelAdapter.js';
 import { env } from '../../config/env.js';
+import type { MessageProcessor } from '../../core/types/MessageProcessor.js';
 import { apiKeyAuth } from './middleware/apiKeyAuth.js';
 
 export interface RouterDeps {

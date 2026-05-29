@@ -47,7 +47,7 @@ src/
 │
 ├── channels/         # Canales de entrada/salida
 │   ├── whatsapp/         # webhook + verify + normalizer + sender + types + WhatsAppInboundAdapter + WhatsAppOutboundAdapter
-│   ├── ChannelAdapter.ts # contratos de ENTRADA: MessageProcessor + InboundChannelAdapter (registry; depende de Express)
+│   ├── ChannelAdapter.ts # contrato de ENTRADA InboundChannelAdapter (depende de Express); re-exporta MessageProcessor (vive en core/)
 │   └── (telegram/, mobile/, web/ — se agregan después sin tocar el grafo ni el dispatch)
 │
 ├── clients/          # HTTP clients hacia backends propios
@@ -84,7 +84,7 @@ src/
 └── core/             # Tipos puros, enums, errores (NO depende de nada)
     ├── enums/        # ChannelType, InboundContentType, OutcomeAction, ...
     ├── errors/       # IdpError (+ flag upstreamDeliveryFailure) + subtipos (IdentityNotFound, ToolExecution, RateLimit)
-    └── types/        # ChannelMessage (contentType+channelMeta+media+location+templateButton), OutboundChannel (OutboundChannelAdapter + registry), Identity, CrmContext, Outcome, OutboundMessage
+    └── types/        # ChannelMessage (contentType+channelMeta+media+location+templateButton), OutboundChannel (OutboundChannelAdapter + registry), MessageProcessor (canal → pipeline), WhatsAppOutbound (payload egress), Identity, CrmContext, Outcome, OutboundMessage
 ```
 
 Cada capa tiene un rol claro. **No hay grises**.
@@ -488,7 +488,7 @@ Cada canal en `channels/{name}/`:
 
 NUNCA mezclar lógica entre canales. Si dos canales necesitan lo mismo → `ChannelAdapter.ts`, `core/types/OutboundChannel.ts`, o `core/`.
 
-`channels/ChannelAdapter.ts` define los contratos de ENTRADA (dependen de `Express`): `MessageProcessor` (canal → pipeline) e `InboundChannelAdapter` (canal → Express: `{ channelType; register(app, processor) }`). El contrato de SALIDA `OutboundChannelAdapter` (+ `OutboundChannelRegistry`) vive en `core/types/OutboundChannel.ts` porque solo referencia tipos de `core/` — así `pregraph/` y `outbound/` lo resuelven por `channelType` sin importar `channels/` (§2 / §12.6).
+`channels/ChannelAdapter.ts` define el contrato de ENTRADA `InboundChannelAdapter` (canal → Express: `{ channelType; register(app, processor) }`), que **depende de `Express`** y por eso vive en `channels/`. El contrato `MessageProcessor` (canal → pipeline) NO depende de Express — vive en `core/types/MessageProcessor.ts` y `ChannelAdapter.ts` lo re-exporta por conveniencia; así `pregraph/` (que lo implementa) e `infrastructure/http/` (que lo recibe en `RouterDeps`) lo importan de `core/` sin tocar `channels/`. El contrato de SALIDA `OutboundChannelAdapter` (+ `OutboundChannelRegistry`) vive en `core/types/OutboundChannel.ts` por la misma razón — solo referencia tipos de `core/` — así `pregraph/` y `outbound/` lo resuelven por `channelType` sin importar `channels/` (§2 / §12.6). Excepción documentada: `infrastructure/http/registerRoutes.ts` importa `InboundChannelAdapter` de `channels/` (irreducible: el contrato depende de Express y `registerRoutes` es el único punto de montaje, §3).
 
 ### 12.1.1 — `ChannelMessage` estandarizado (entrante)
 

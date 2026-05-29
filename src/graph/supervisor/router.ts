@@ -7,8 +7,10 @@ import { type ToolName, getAvailableTools } from './filterTools.js';
  * nodo ir.
  *
  * Salidas posibles (node names que `compile.ts` registra):
- * - 'subgraph_placeholder' — atajo button con subgrafo activo, o intent
- *   de subgrafo (en H3.B todos los subgrafos son placeholder).
+ * - 'subgraph_placeholder' — marcador intermedio para intents de subgrafo
+ *   (schedule/confirm/cancel/reschedule/query) y atajos button. `compile.ts`
+ *   lo resuelve al `*_dispatch` real vía `routeFromSupervisorWithSubgraphs`;
+ *   solo cae al nodo placeholder un button stale sin subgrafo activo.
  * - 'social_responder'     — greeting/farewell/oos/social_unknown.
  * - `tool_<name>`          — tools atómicas (retrieve_manzanillo, etc).
  *
@@ -54,7 +56,8 @@ export function routeFromSupervisor(state: GraphState): RouterDestination {
     return SOCIAL_RESPONDER_NODE;
   }
 
-  // 3. Subgrafos (placeholder en H3.B).
+  // 3. Subgrafos: devuelve el marcador; `routeFromSupervisorWithSubgraphs`
+  // (compile.ts) lo traduce al `*_dispatch` real según intent.
   if (messageType === 'action') {
     const intent = routing.intent ?? 'unknown';
     if (intent !== 'unknown' && allowed.has(intent as ToolName)) {
@@ -70,7 +73,7 @@ export function routeFromSupervisor(state: GraphState): RouterDestination {
     return SOCIAL_RESPONDER_NODE;
   }
 
-  // 5. Query (en H3.B: placeholder de subgrafo query).
+  // 5. Query: marcador → `query_dispatch` (resuelto en compile.ts).
   if (messageType === 'query' && allowed.has('query')) {
     return SUBGRAPH_PLACEHOLDER_NODE;
   }
