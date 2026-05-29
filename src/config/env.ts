@@ -133,6 +133,21 @@ export const envSchema = z
     IDP_API_KEY: z.string().min(16),
 
     /**
+     * Takeover humano manual (spec P-human-takeover). `HUMAN_TAKEOVER_ENABLED`
+     * (default `false` hasta que Guacuco despliegue el endpoint/flag) habilita:
+     * detección capas A/B, gate en el pre-grafo y disparo fire-and-forget.
+     * `TAKEOVER_SENTIMENT_ENABLED` (default `false`) habilita la capa C (juez LLM
+     * de frustración, 1 call/turno) — opt-in para arrancar sin ella y prenderla
+     * con datos de falsos positivos. `TAKEOVER_FAILS_THRESHOLD` es el umbral de la
+     * capa B (N salidas `handed_off`/`error` consecutivas). `TAKEOVER_TTL_SECONDS`
+     * es el TTL del espejo Redis = TTL de seguridad de reactivación.
+     */
+    HUMAN_TAKEOVER_ENABLED: boolFromString,
+    TAKEOVER_SENTIMENT_ENABLED: boolFromString,
+    TAKEOVER_FAILS_THRESHOLD: z.coerce.number().int().positive().default(3),
+    TAKEOVER_TTL_SECONDS: z.coerce.number().int().positive().default(21_600), // 6h
+
+    /**
      * Dev-only: si `true`, el webhook de WhatsApp NO valida HMAC. Permite
      * trabajar localmente sin configurar `APP_SECRET_BY_PLATFORM_JSON`. El
      * `phone_number_id` sigue siendo obligatorio (debe existir en

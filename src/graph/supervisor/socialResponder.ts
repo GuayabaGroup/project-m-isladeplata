@@ -1,6 +1,7 @@
 import type { Logger } from 'winston';
 import { SOCIAL_CONFIG } from '../../config/llm.config.js';
 import { buildPersona, toPersonaContext } from '../../config/personality/buildPersona.js';
+import type { TakeoverReasonCode } from '../../core/enums/TakeoverReason.js';
 import type { Outcome } from '../../core/types/Outcome.js';
 import type { LlmProvider } from '../../infrastructure/llm/LlmProvider.js';
 import { sanitizeUserInput } from '../../security/sanitize.js';
@@ -26,13 +27,34 @@ const FALLBACK_BY_TYPE: Record<MessageType, string> = {
   oos: 'Puedo ayudarte con turnos, consultas y reservas. ¿Querés agendar algo?',
   action: 'No te entendí bien. ¿Podrías reformular?',
   query: 'Decime qué información necesitás.',
+  // human_request se maneja en el short-circuit de arriba; entrada defensiva.
+  human_request: 'Te conecto con una persona del equipo.',
 };
+
+/** Respuesta canned del handoff a humano (capas A/C). Determinística, sin LLM. */
+const HUMAN_HANDOFF_REPLY =
+  'Entiendo. Te conecto con una persona del equipo: en breve te van a responder por acá. 🙌';
 
 export function makeSocialResponderNode(deps: SocialDeps) {
   const { llm, logger } = deps;
 
   return async function socialResponder(state: GraphState): Promise<GraphStateUpdate> {
     const messageType: MessageType = state.routing?.messageType ?? 'oos';
+
+    // Takeover (capas A/C, spec P-human-takeover): handoff canned + señal de
+    // takeover, SIN call LLM. El pipeline lee `outcome.takeover` y dispara el
+    // notifier fire-and-forget; a partir del próximo turno el gate silencia.
+    if (messageType === 'human_request') {
+      const reasonCode: TakeoverReasonCode = state.routing?.takeoverReason ?? 'other';
+      logger.info('Human takeover requested', { reason_code: reasonCode });
+      const outcome: Outcome = {
+        action: 'handed_off',
+        pendingReply: { text: HUMAN_HANDOFF_REPLY },
+        takeover: { reasonCode },
+      };
+      return { outcome };
+    }
+
     const text = sanitizeUserInput(state.input?.channelMessage?.contentText);
 
     const persona = state.identity
@@ -77,6 +99,8 @@ const TASK_BY_TYPE: Record<MessageType, string> = {
     'No quedó claro qué pide el usuario. Pedile que reformule, ofreciendo ayudar con turnos o consultas. Máximo 2 oraciones.',
   query:
     'No quedó claro qué información necesita el usuario. Pedile que reformule, ofreciendo ayudar con turnos o consultas. Máximo 2 oraciones.',
+  human_request:
+    'El usuario pide hablar con una persona. Avisale que lo derivás a alguien del equipo. Máximo 2 oraciones.',
 };
 
 function buildSystemPrompt(messageType: MessageType, persona: string): string {

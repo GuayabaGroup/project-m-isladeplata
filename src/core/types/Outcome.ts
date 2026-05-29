@@ -1,5 +1,17 @@
 import type { OutcomeAction } from '../enums/OutcomeAction.js';
+import type { TakeoverReasonCode } from '../enums/TakeoverReason.js';
 import type { ToolCallRecord } from './ToolCall.js';
+
+/**
+ * Señal de disparo de takeover humano que el supervisor (capas A/C) adjunta al
+ * `outcome` del turno. El pipeline la lee post-invoke y dispara el
+ * `TakeoverNotifier` fire-and-forget. Se piggybackea en `outcome` (fresco por
+ * turno) en lugar de un channel nuevo del state para evitar staleness entre
+ * turnos. La capa B no usa esto — la detecta y dispara el propio pipeline.
+ */
+export interface TakeoverTrigger {
+  reasonCode: TakeoverReasonCode;
+}
 
 export interface OutboundButton {
   id: string;
@@ -39,4 +51,10 @@ export interface Outcome {
    * `subgraphState.meta.toolCalls`). El pipeline las pasa al persister (P2).
    */
   toolCalls?: ToolCallRecord[];
+  /**
+   * Set por el supervisor (capas A/C) cuando se debe entregar la conversación a
+   * un humano. El pipeline lo lee post-invoke y dispara el takeover
+   * fire-and-forget (spec P-human-takeover).
+   */
+  takeover?: TakeoverTrigger;
 }

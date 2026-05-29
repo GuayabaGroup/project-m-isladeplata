@@ -66,6 +66,7 @@ import {
 } from './subgraphs/schedule/state.js';
 import { detectButtonShortcut } from './supervisor/buttonShortcut.js';
 import { makeClassifyIntentNode } from './supervisor/classifyIntent.js';
+import { makeFrustrationJudge } from './supervisor/detectFrustration.js';
 import { detectAtomicTool, routeFromSupervisor } from './supervisor/router.js';
 import { makeSocialResponderNode } from './supervisor/socialResponder.js';
 import { detectUnsupportedContent } from './supervisor/unsupportedContent.js';
@@ -129,7 +130,24 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
   const { checkpointer, logger, llm, guacuco } = deps;
 
   const toolDeps: ToolDeps = { guacuco, logger };
-  const classifyIntent = makeClassifyIntentNode({ llm, logger });
+
+  // Takeover humano (spec P-human-takeover). No agrega nodos al grafo: capa A
+  // reusa el clasificador (`humanRequestEnabled` → emite el messageType
+  // `human_request`) y capa C es el juez de frustración inyectado en el mismo
+  // clasificador (`frustrationJudge`, en su propio flag). Ambas rutean a
+  // `social_responder`, que reconoce `human_request` y emite el handoff canned +
+  // la señal `outcome.takeover`. Con HUMAN_TAKEOVER_ENABLED=false el clasificador
+  // nunca emite `human_request` → comportamiento idéntico al de antes del takeover.
+  const takeoverEnabled = env.HUMAN_TAKEOVER_ENABLED;
+  const sentimentEnabled = takeoverEnabled && env.TAKEOVER_SENTIMENT_ENABLED;
+
+  const classifyIntent = makeClassifyIntentNode({
+    llm,
+    logger,
+    humanRequestEnabled: takeoverEnabled,
+    // Capa C: el juez se inyecta solo cuando el flag de sentimiento está on.
+    ...(sentimentEnabled ? { frustrationJudge: makeFrustrationJudge({ llm, logger }) } : {}),
+  });
   const socialResponder = makeSocialResponderNode({ llm, logger });
 
   // Schedule nodes (factory pattern: cada uno recibe deps + retorna node fn)
@@ -227,7 +245,7 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
 
   const wrapTool = (t: AtomicTool) => async (state: GraphState) => t.run(state, toolDeps);
 
-  const compiled = new StateGraph(GraphStateAnnotation)
+  const builder = new StateGraph(GraphStateAnnotation)
     .addNode('supervisor_entry', supervisorEntryNode)
     .addNode('classify_intent', classifyIntent)
     .addNode('social_responder', socialResponder)
@@ -280,7 +298,9 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
     .addNode('query_classify', wrapScheduleAsync(queryClassify))
     .addNode('query_fetch', wrapScheduleAsync(queryFetch))
     .addNode('query_synthesize', wrapScheduleAsync(querySynthesize))
-    .addNode('query_finalize', subgraphFinalize)
+    .addNode('query_finalize', subgraphFinalize);
+
+  const compiled = builder
     .addEdge(START, 'supervisor_entry')
     .addConditionalEdges('supervisor_entry', supervisorEntryRouter, {
       unsupported_end: END,

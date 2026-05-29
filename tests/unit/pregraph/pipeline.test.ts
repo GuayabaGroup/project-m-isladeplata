@@ -3,6 +3,7 @@ import type { Logger } from 'winston';
 import type { GuacucoClient } from '../../../src/clients/GuacucoClient.js';
 import type { ParguitoClient } from '../../../src/clients/ParguitoClient.js';
 import type { ResolveIdentityOutput } from '../../../src/clients/types/GuacucoTypes.js';
+import { env } from '../../../src/config/env.js';
 import { IdentityNotFoundError } from '../../../src/core/errors/IdentityNotFoundError.js';
 import { ToolExecutionError } from '../../../src/core/errors/ToolExecutionError.js';
 import type { ChannelMessage } from '../../../src/core/types/ChannelMessage.js';
@@ -15,8 +16,10 @@ import {
 } from '../../../src/infrastructure/observability/metrics.js';
 import type { DedupStore } from '../../../src/infrastructure/redis/DedupStore.js';
 import type { RateLimitStore } from '../../../src/infrastructure/redis/RateLimitStore.js';
+import type { TakeoverStore } from '../../../src/infrastructure/redis/TakeoverStore.js';
 import type { ConversationPersister } from '../../../src/pregraph/ConversationPersister.js';
 import type { ResponseDispatcher } from '../../../src/pregraph/ResponseDispatcher.js';
+import type { TakeoverNotifier } from '../../../src/pregraph/TakeoverNotifier.js';
 import type { ThreadResolver } from '../../../src/pregraph/ThreadResolver.js';
 import { Pipeline } from '../../../src/pregraph/pipeline.js';
 
@@ -88,6 +91,14 @@ function makeDeps() {
   const parguito = { getCrmContext: vi.fn().mockResolvedValue(EMPTY_CRM_CONTEXT) };
   const dispatcher = { dispatch: vi.fn().mockResolvedValue(undefined) };
   const persister = { persistTurn: vi.fn().mockResolvedValue(undefined) };
+  const takeover = {
+    isHumanControlled: vi.fn().mockResolvedValue(false),
+    mirrorActive: vi.fn().mockResolvedValue(undefined),
+    clear: vi.fn().mockResolvedValue(undefined),
+    bumpFailures: vi.fn().mockResolvedValue(1),
+    resetFailures: vi.fn().mockResolvedValue(undefined),
+  };
+  const takeoverNotifier = { trigger: vi.fn().mockResolvedValue(undefined) };
   const threadResolver = {
     buildThreadId: vi.fn().mockReturnValue('biz-1:cli-1:whatsapp:1'),
     resolve: vi.fn().mockResolvedValue({
@@ -121,6 +132,8 @@ function makeDeps() {
       graph: graph as unknown as CompiledGraph,
       dispatcher: dispatcher as unknown as ResponseDispatcher,
       persister: persister as unknown as ConversationPersister,
+      takeover: takeover as unknown as TakeoverStore,
+      takeoverNotifier: takeoverNotifier as unknown as TakeoverNotifier,
       logger,
     },
     mocks: {
@@ -132,6 +145,8 @@ function makeDeps() {
       graph,
       dispatcher,
       persister,
+      takeover,
+      takeoverNotifier,
       logger,
     },
   };
@@ -537,5 +552,148 @@ describe('Pipeline.process — persistence (H8.1, step 9)', () => {
 
     const outcome = await pipeline.process(makeMessage());
     expect(outcome.action).toBe('response');
+  });
+});
+
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+describe('Pipeline takeover (P-human-takeover)', () => {
+  beforeEach(() => {
+    resetMetrics();
+    env.HUMAN_TAKEOVER_ENABLED = true;
+  });
+  afterEach(() => {
+    env.HUMAN_TAKEOVER_ENABLED = false;
+  });
+
+  it('gate: silences the bot (ignored + persisted) when thread is human_controlled', async () => {
+    const { deps, mocks } = makeDeps();
+    mocks.guacuco.resolveIdentity.mockResolvedValue(fullIdentity());
+    mocks.takeover.isHumanControlled.mockResolvedValue(true);
+    const pipeline = new Pipeline(deps);
+
+    const outcome = await pipeline.process(makeMessage());
+
+    expect(outcome.action).toBe('ignored');
+    // El turno entrante se persiste para el historial del dashboard...
+    expect(mocks.persister.persistTurn).toHaveBeenCalledTimes(1);
+    // ...pero el bot NO invoca el grafo ni responde.
+    expect(mocks.graph.invoke).not.toHaveBeenCalled();
+    expect(mocks.dispatcher.dispatch).not.toHaveBeenCalled();
+    expect(await metric('isladeplata_takeover_muted_total', { channel: 'whatsapp' })).toBe(1);
+  });
+
+  it('gate: does NOT silence when flag is off (even if mirror says controlled)', async () => {
+    env.HUMAN_TAKEOVER_ENABLED = false;
+    const { deps, mocks } = makeDeps();
+    mocks.guacuco.resolveIdentity.mockResolvedValue(fullIdentity());
+    mocks.takeover.isHumanControlled.mockResolvedValue(true);
+    const pipeline = new Pipeline(deps);
+
+    await pipeline.process(makeMessage());
+
+    expect(mocks.takeover.isHumanControlled).not.toHaveBeenCalled();
+    expect(mocks.graph.invoke).toHaveBeenCalled();
+  });
+
+  it('gate: repopulates the mirror when Guacuco reports humanControlled.active', async () => {
+    const { deps, mocks } = makeDeps();
+    mocks.guacuco.resolveIdentity.mockResolvedValue(
+      fullIdentity({ humanControlled: { active: true, expiresAt: null } }),
+    );
+    mocks.takeover.isHumanControlled.mockResolvedValue(true);
+    const pipeline = new Pipeline(deps);
+
+    await pipeline.process(makeMessage());
+
+    expect(mocks.takeover.mirrorActive).toHaveBeenCalledWith('biz-1:cli-1:whatsapp:1');
+  });
+
+  it('gate: invalidates the mirror when Guacuco reports humanControlled.active=false', async () => {
+    const { deps, mocks } = makeDeps();
+    mocks.guacuco.resolveIdentity.mockResolvedValue(
+      fullIdentity({ humanControlled: { active: false, expiresAt: null } }),
+    );
+    const pipeline = new Pipeline(deps);
+
+    await pipeline.process(makeMessage());
+
+    expect(mocks.takeover.clear).toHaveBeenCalledWith('biz-1:cli-1:whatsapp:1');
+  });
+
+  it('layer A/C: triggers takeover from outcome.takeover signal', async () => {
+    const { deps, mocks } = makeDeps();
+    mocks.guacuco.resolveIdentity.mockResolvedValue(fullIdentity());
+    mocks.graph.invoke.mockResolvedValue({
+      outcome: {
+        action: 'handed_off',
+        pendingReply: { text: 'Te conecto con una persona.' },
+        takeover: { reasonCode: 'explicit_request' },
+      },
+    });
+    const pipeline = new Pipeline(deps);
+
+    await pipeline.process(makeMessage());
+    await flush();
+
+    expect(mocks.takeoverNotifier.trigger).toHaveBeenCalledWith(
+      expect.anything(),
+      'biz-1:cli-1:whatsapp:1',
+      expect.anything(),
+      'explicit_request',
+      null,
+    );
+    // No cuenta como falla del bot.
+    expect(mocks.takeover.bumpFailures).not.toHaveBeenCalled();
+  });
+
+  it('layer B: triggers takeover when consecutive failures reach the threshold', async () => {
+    const { deps, mocks } = makeDeps();
+    mocks.guacuco.resolveIdentity.mockResolvedValue(fullIdentity());
+    mocks.graph.invoke.mockResolvedValue({
+      outcome: { action: 'error', pendingReply: { text: 'Ups' } },
+    });
+    mocks.takeover.bumpFailures.mockResolvedValue(3); // == TAKEOVER_FAILS_THRESHOLD
+    const pipeline = new Pipeline(deps);
+
+    await pipeline.process(makeMessage());
+    await flush();
+
+    expect(mocks.takeover.bumpFailures).toHaveBeenCalledWith('biz-1:cli-1:whatsapp:1');
+    expect(mocks.takeoverNotifier.trigger).toHaveBeenCalledWith(
+      expect.anything(),
+      'biz-1:cli-1:whatsapp:1',
+      expect.anything(),
+      'repeated_failures',
+      null,
+    );
+  });
+
+  it('layer B: does NOT trigger below the threshold', async () => {
+    const { deps, mocks } = makeDeps();
+    mocks.guacuco.resolveIdentity.mockResolvedValue(fullIdentity());
+    mocks.graph.invoke.mockResolvedValue({
+      outcome: { action: 'handed_off', pendingReply: { text: 'no disponible' } },
+    });
+    mocks.takeover.bumpFailures.mockResolvedValue(1);
+    const pipeline = new Pipeline(deps);
+
+    await pipeline.process(makeMessage());
+    await flush();
+
+    expect(mocks.takeoverNotifier.trigger).not.toHaveBeenCalled();
+  });
+
+  it('layer B: resets the failure counter on a successful outcome', async () => {
+    const { deps, mocks } = makeDeps();
+    mocks.guacuco.resolveIdentity.mockResolvedValue(fullIdentity());
+    // graph default mock returns a 'response' outcome.
+    const pipeline = new Pipeline(deps);
+
+    await pipeline.process(makeMessage());
+    await flush();
+
+    expect(mocks.takeover.resetFailures).toHaveBeenCalledWith('biz-1:cli-1:whatsapp:1');
+    expect(mocks.takeoverNotifier.trigger).not.toHaveBeenCalled();
   });
 });

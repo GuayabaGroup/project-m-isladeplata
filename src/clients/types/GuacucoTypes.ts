@@ -1,4 +1,5 @@
 import type { ProfileType } from '../../core/enums/ProfileType.js';
+import type { TakeoverReasonCode } from '../../core/enums/TakeoverReason.js';
 
 // ============================================================================
 // Identity resolve — GET /api/v1/identity/resolve (snake_case query params)
@@ -43,6 +44,12 @@ export interface IdentityResolveRawResponse {
   is_new_user: boolean;
   welcome_message?: string | null;
   onboarding_url?: string | null;
+  /**
+   * Estado de takeover humano del thread (spec P-human-takeover). OPCIONAL: hoy
+   * Guacuco todavía no lo emite (endpoint/flag bloqueado). Cuando despliegue, el
+   * pre-grafo lo usa para repoblar/invalidar el espejo Redis del gate.
+   */
+  human_controlled?: { active: boolean; expires_at?: string | null } | null;
 }
 
 export interface BusinessService {
@@ -108,6 +115,13 @@ export interface ResolveIdentityOutput {
   isNewUser: boolean;
   welcomeMessage: string | null;
   onboardingUrl: string | null;
+  /**
+   * Estado de takeover humano del thread (spec P-human-takeover). `undefined`
+   * cuando Guacuco no emite el campo (no desplegado) → el gate se gobierna solo
+   * por el espejo Redis + TTL. `active: true` repuebla el espejo; `active: false`
+   * lo invalida (reactivación humana desde el dashboard).
+   */
+  humanControlled?: { active: boolean; expiresAt: string | null };
 }
 
 // ============================================================================
@@ -395,6 +409,39 @@ export interface PersistAgentTurnsRequest {
 export interface PersistAgentTurnsResponse {
   turn_id: string;
   persisted: boolean;
+}
+
+// ============================================================================
+// Takeover humano — POST /api/v1/conversations/takeover (spec P-human-takeover)
+// Fire-and-forget desde el agente al auto-detectar (capas A/B/C).
+// Idempotente por (tenant_allia_id, idempotency_key) a nivel de Guacuco.
+// ============================================================================
+
+export interface TriggerTakeoverRequest {
+  tenant_allia_id: string;
+  /** Mismo `thread_id` del checkpointer / P2 — llave del estado de takeover. */
+  thread_id: string;
+  profile_uuid: string;
+  profile_type: ProfileType;
+  channel: string;
+  platform_id: number;
+  reason_code: TakeoverReasonCode;
+  /** Subgrafo activo al disparar, o null. */
+  subgraph: string | null;
+  /** Texto corto determinístico (sin UUIDs, PII enmascarada). */
+  summary: string;
+  /** Último mensaje del cliente, enmascarado. */
+  last_user_message: string;
+  /** TTL de seguridad acordado; Guacuco lo aplica server-side. */
+  ttl_seconds: number;
+  /** Dedup server-side; candidato: `${thread_id}:${turn_id}`. */
+  idempotency_key: string;
+}
+
+export interface TriggerTakeoverResult {
+  takeover_id: string;
+  /** `false` cuando ya había un takeover activo para ese `thread_id`. */
+  created: boolean;
 }
 
 // confirm_appointment

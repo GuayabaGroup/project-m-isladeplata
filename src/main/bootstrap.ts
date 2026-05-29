@@ -29,12 +29,14 @@ import {
   connectRedis,
   quitRedis,
 } from '../infrastructure/redis/RedisConnection.js';
+import { TakeoverStore } from '../infrastructure/redis/TakeoverStore.js';
 import { initLangSmith } from '../infrastructure/tracing/langsmith.js';
 import { OutboundMessageBuilder } from '../nlg/OutboundMessageBuilder.js';
 import { ResponseBuilder } from '../nlg/ResponseBuilder.js';
 import { OutboundMessageService } from '../outbound/OutboundMessageService.js';
 import { ConversationPersister } from '../pregraph/ConversationPersister.js';
 import { ResponseDispatcher } from '../pregraph/ResponseDispatcher.js';
+import { TakeoverNotifier } from '../pregraph/TakeoverNotifier.js';
 import { ThreadResolver } from '../pregraph/ThreadResolver.js';
 import { Pipeline } from '../pregraph/pipeline.js';
 
@@ -94,6 +96,7 @@ export async function bootstrap(): Promise<BootstrappedApp> {
 
   const dedup = new DedupStore(redis, logger);
   const rateLimit = new RateLimitStore(redis, logger);
+  const takeover = new TakeoverStore(redis, logger);
 
   const whatsappHttp = new RetryClient({
     baseURL: WHATSAPP_GRAPH_BASE_URL,
@@ -136,6 +139,7 @@ export async function bootstrap(): Promise<BootstrappedApp> {
   const graph = compileGraph({ checkpointer: checkpointer.saver, logger, llm, guacuco });
 
   const persister = new ConversationPersister(guacuco, logger);
+  const takeoverNotifier = new TakeoverNotifier(guacuco, takeover, logger);
 
   const pipeline = new Pipeline({
     dedup,
@@ -146,6 +150,8 @@ export async function bootstrap(): Promise<BootstrappedApp> {
     graph,
     dispatcher,
     persister,
+    takeover,
+    takeoverNotifier,
     logger,
   });
 

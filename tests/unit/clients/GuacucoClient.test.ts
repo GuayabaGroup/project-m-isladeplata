@@ -10,6 +10,7 @@ import type {
   PersistAgentTurnsResponse,
   ScheduleAppointmentResult,
   ToolExecuteResponse,
+  TriggerTakeoverRequest,
   ValidateRescheduleSlotResult,
 } from '../../../src/clients/types/GuacucoTypes.js';
 import { IdentityNotFoundError } from '../../../src/core/errors/IdentityNotFoundError.js';
@@ -190,6 +191,31 @@ describe('GuacucoClient.resolveIdentity', () => {
     await expect(
       client.resolveIdentity({ channelType: 'whatsapp', channelId: 'x' }),
     ).rejects.toMatchObject({ code: 'guacuco_identity_error' });
+  });
+
+  it('maps human_controlled when present (spec P-human-takeover)', async () => {
+    const mockHttp = makeMockHttp();
+    mockHttp.get.mockResolvedValue(
+      makeResponse({
+        success: true,
+        data: makeRaw({ human_controlled: { active: true, expires_at: '2026-05-28T18:00:00Z' } }),
+      }),
+    );
+
+    const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
+    const result = await client.resolveIdentity({ channelType: 'whatsapp', channelId: 'x' });
+
+    expect(result.humanControlled).toEqual({ active: true, expiresAt: '2026-05-28T18:00:00Z' });
+  });
+
+  it('leaves humanControlled undefined when Guacuco omits the field', async () => {
+    const mockHttp = makeMockHttp();
+    mockHttp.get.mockResolvedValue(makeResponse({ success: true, data: makeRaw() }));
+
+    const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
+    const result = await client.resolveIdentity({ channelType: 'whatsapp', channelId: 'x' });
+
+    expect(result.humanControlled).toBeUndefined();
   });
 });
 
@@ -669,5 +695,56 @@ describe('GuacucoClient.persistAgentTurns', () => {
     await expect(client.persistAgentTurns(samplePayload)).rejects.toBeInstanceOf(
       ToolExecutionError,
     );
+  });
+});
+
+describe('GuacucoClient.triggerTakeover', () => {
+  const samplePayload: TriggerTakeoverRequest = {
+    tenant_allia_id: 'allia-1',
+    thread_id: 'biz-1:cli-1:whatsapp:1',
+    profile_uuid: 'cli-1',
+    profile_type: 'client',
+    channel: 'whatsapp',
+    platform_id: 1,
+    reason_code: 'explicit_request',
+    subgraph: null,
+    summary: 'El cliente pidió explícitamente hablar con una persona.',
+    last_user_message: 'quiero hablar con alguien',
+    ttl_seconds: 21600,
+    idempotency_key: 'biz-1:cli-1:whatsapp:1:660e8400',
+  };
+
+  it('posts payload to /api/v1/conversations/takeover and returns result', async () => {
+    const mockHttp = makeMockHttp();
+    mockHttp.post.mockResolvedValue(
+      makeResponse({ success: true, data: { takeover_id: 'tk-1', created: true } }, 201),
+    );
+
+    const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
+    const result = await client.triggerTakeover(samplePayload);
+
+    expect(result).toEqual({ takeover_id: 'tk-1', created: true });
+    expect(mockHttp.post).toHaveBeenCalledWith('/api/v1/conversations/takeover', samplePayload);
+  });
+
+  it('returns created=false on duplicate (idempotent)', async () => {
+    const mockHttp = makeMockHttp();
+    mockHttp.post.mockResolvedValue(
+      makeResponse({ success: true, data: { takeover_id: 'tk-1', created: false } }, 200),
+    );
+
+    const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
+    const result = await client.triggerTakeover(samplePayload);
+    expect(result.created).toBe(false);
+  });
+
+  it('propagates backend errors as ToolExecutionError', async () => {
+    const mockHttp = makeMockHttp();
+    mockHttp.post.mockResolvedValue(
+      makeResponse({ success: false, error: { code: 'BUSINESS_NOT_FOUND', message: 'x' } }),
+    );
+
+    const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
+    await expect(client.triggerTakeover(samplePayload)).rejects.toBeInstanceOf(ToolExecutionError);
   });
 });

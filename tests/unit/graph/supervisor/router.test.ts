@@ -54,6 +54,14 @@ describe('routeFromSupervisor', () => {
     ).toBe<RouterDestination>('subgraph_placeholder');
   });
 
+  it('human_request → social_responder (handoff handled there)', () => {
+    expect(
+      routeFromSupervisor(
+        makeState({ messageType: 'human_request', takeoverReason: 'explicit_request' }),
+      ),
+    ).toBe<RouterDestination>('social_responder');
+  });
+
   it('greeting → social', () => {
     expect(routeFromSupervisor(makeState({ messageType: 'greeting', confidence: 0.9 }))).toBe(
       'social_responder',

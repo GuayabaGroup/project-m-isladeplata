@@ -41,6 +41,14 @@ export function routeFromSupervisor(state: GraphState): RouterDestination {
 
   const messageType = routing.messageType ?? 'oos';
 
+  // 1.5. Takeover capas A/C — el cliente pidió explícitamente un humano o el
+  // juez detectó frustración. Va al `social_responder`, que reconoce el
+  // messageType `human_request` y emite el handoff canned + la señal de takeover
+  // (sin call LLM). Solo se emite cuando HUMAN_TAKEOVER_ENABLED.
+  if (messageType === 'human_request') {
+    return SOCIAL_RESPONDER_NODE;
+  }
+
   // 2. Social fast-path.
   if (messageType === 'greeting' || messageType === 'farewell' || messageType === 'oos') {
     return SOCIAL_RESPONDER_NODE;

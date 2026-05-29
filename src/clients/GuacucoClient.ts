@@ -35,6 +35,8 @@ import type {
   ToolExecuteRequest,
   ToolExecuteResponse,
   ToolUrlResult,
+  TriggerTakeoverRequest,
+  TriggerTakeoverResult,
   ValidateRescheduleSlotParams,
   ValidateRescheduleSlotResult,
 } from './types/GuacucoTypes.js';
@@ -44,6 +46,7 @@ const TOOL_EXECUTE_PATH = '/api/v1/tools/execute';
 const QUERY_TABLES_PATH = '/api/v1/query-processor/tables';
 const QUERY_EXECUTE_PATH = '/api/v1/query-processor/query';
 const PERSIST_AGENT_TURNS_PATH = '/api/v1/conversations/agent-turns';
+const TAKEOVER_PATH = '/api/v1/conversations/takeover';
 
 /**
  * Opciones internas de `executeTool`. El `context` siempre se construye vía
@@ -426,5 +429,24 @@ export class GuacucoClient extends BaseHttpClient {
       payload,
     );
     return this.unwrap<PersistAgentTurnsResponse>(response);
+  }
+
+  // ==========================================================================
+  // Takeover humano (spec P-human-takeover)
+  // ==========================================================================
+
+  /**
+   * Registra un takeover humano para un thread (`human_controlled`). Idempotente
+   * por `(tenant_allia_id, idempotency_key)`: reenvíos retornan `created: false`
+   * (mismo patrón de P1/P2). Guacuco aplica el `ttl_seconds` server-side.
+   *
+   * ⚠️ Pendiente backend: Guacuco NO expone hoy `POST /conversations/takeover`
+   * (endpoint bloqueado en la spec). La llamada queda estandarizada del lado de
+   * IDP; retornará error hasta que el endpoint exista. Por eso el caller
+   * (`TakeoverNotifier`) la invoca fire-and-forget y NUNCA bloquea el turno.
+   */
+  async triggerTakeover(payload: TriggerTakeoverRequest): Promise<TriggerTakeoverResult> {
+    const response = await this.http.post<Envelope<TriggerTakeoverResult>>(TAKEOVER_PATH, payload);
+    return this.unwrap<TriggerTakeoverResult>(response);
   }
 }

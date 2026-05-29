@@ -154,4 +154,26 @@ describe('socialResponder node', () => {
     expect(params?.system).toContain('Ally');
     expect(params?.system).toContain('Estética Norte');
   });
+
+  // Takeover (capas A/C, spec P-human-takeover) — handoff canned, sin LLM.
+  it('human_request: emits handed_off + takeover signal without calling the LLM', async () => {
+    const { llm, create } = makeProvider('unused');
+    const node = makeSocialResponderNode({ llm, logger: mockLogger });
+    const state = makeState('quiero hablar con una persona', 'human_request');
+    state.routing.takeoverReason = 'explicit_request';
+
+    const update = await node(state);
+
+    expect(create).not.toHaveBeenCalled();
+    expect(update.outcome?.action).toBe('handed_off');
+    expect(update.outcome?.pendingReply?.text).toBeTruthy();
+    expect(update.outcome?.takeover).toEqual({ reasonCode: 'explicit_request' });
+  });
+
+  it('human_request: defaults reasonCode to "other" when none was set', async () => {
+    const { llm } = makeProvider('unused');
+    const node = makeSocialResponderNode({ llm, logger: mockLogger });
+    const update = await node(makeState('pasame con alguien', 'human_request'));
+    expect(update.outcome?.takeover).toEqual({ reasonCode: 'other' });
+  });
 });

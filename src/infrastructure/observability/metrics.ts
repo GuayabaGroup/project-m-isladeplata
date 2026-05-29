@@ -54,6 +54,20 @@ export const persistTurnTotal = new Counter({
   registers: [metricsRegistry],
 });
 
+export const takeoverTotal = new Counter({
+  name: 'isladeplata_takeover_total',
+  help: 'Disparos de takeover humano por capa (reason_code) y resultado del POST a Guacuco.',
+  labelNames: ['reason_code', 'result'],
+  registers: [metricsRegistry],
+});
+
+export const takeoverMutedTotal = new Counter({
+  name: 'isladeplata_takeover_muted_total',
+  help: 'Turnos silenciados por el gate de takeover (conversación en human_controlled).',
+  labelNames: ['channel'],
+  registers: [metricsRegistry],
+});
+
 export const pipelineLatencyMs = new Histogram({
   name: 'isladeplata_pipeline_latency_ms',
   help: 'Latencia end-to-end del pipeline en milisegundos.',
@@ -73,5 +87,7 @@ export function resetMetrics(): void {
   identityNotFoundTotal.reset();
   subgraphEnteredTotal.reset();
   persistTurnTotal.reset();
+  takeoverTotal.reset();
+  takeoverMutedTotal.reset();
   pipelineLatencyMs.reset();
 }

@@ -164,4 +164,53 @@ describe('classifyIntent node', () => {
     expect(update.routing?.messageType).toBe('action');
     expect(update.routing?.intent).toBe('unknown');
   });
+
+  // ==========================================================================
+  // Takeover capa A / C (spec P-human-takeover)
+  // ==========================================================================
+
+  it('capa A: classifies human_request when humanRequestEnabled + sets explicit_request reason', async () => {
+    const llm = makeProvider('{"messageType":"human_request","confidence":0.92}');
+    const node = makeClassifyIntentNode({ llm, logger: mockLogger, humanRequestEnabled: true });
+    const update = await node(makeState('quiero hablar con una persona de verdad'));
+    expect(update.routing?.messageType).toBe('human_request');
+    expect(update.routing?.takeoverReason).toBe('explicit_request');
+  });
+
+  it('capa A: rejects human_request when the flag is OFF (normalizes to action/unknown)', async () => {
+    const llm = makeProvider('{"messageType":"human_request","confidence":0.92}');
+    const node = makeClassifyIntentNode({ llm, logger: mockLogger });
+    const update = await node(makeState('quiero hablar con alguien'));
+    expect(update.routing?.messageType).toBe('action');
+    expect(update.routing?.takeoverReason).toBeUndefined();
+  });
+
+  it('capa C: short-circuits to human_request when the frustration judge fires (no classify call)', async () => {
+    const create = vi.fn(async () => makeStubMessage('unused'));
+    const client: AnthropicMessagesLike = { create };
+    const llm = new AnthropicProvider({ apiKey: 'test-anthropic-key', logger: mockLogger, client });
+    const node = makeClassifyIntentNode({
+      llm,
+      logger: mockLogger,
+      humanRequestEnabled: true,
+      frustrationJudge: vi.fn().mockResolvedValue(true),
+    });
+    const update = await node(makeState('son un desastre, no sirve para nada'));
+    expect(update.routing?.messageType).toBe('human_request');
+    expect(update.routing?.takeoverReason).toBe('sentiment_frustration');
+    // No gastó la call de clasificación.
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('capa C: proceeds to normal classify when the judge does NOT fire', async () => {
+    const llm = makeProvider('{"messageType":"greeting","confidence":0.9}');
+    const node = makeClassifyIntentNode({
+      llm,
+      logger: mockLogger,
+      humanRequestEnabled: true,
+      frustrationJudge: vi.fn().mockResolvedValue(false),
+    });
+    const update = await node(makeState('hola buenas'));
+    expect(update.routing?.messageType).toBe('greeting');
+  });
 });

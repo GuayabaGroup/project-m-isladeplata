@@ -15,6 +15,14 @@ import type { GraphState, GraphStateUpdate, Intent, MessageType } from '../state
 export interface ClassifyDeps {
   llm: LlmProvider;
   logger: Logger;
+  /** Capa A (spec P-human-takeover): si `true`, el clasificador reconoce el
+   * messageType `human_request`. Default `false` → comportamiento idéntico al
+   * de antes del takeover. */
+  humanRequestEnabled?: boolean;
+  /** Capa C (spec P-human-takeover): juez de frustración opt-in. Si está
+   * presente, corre ANTES del clasificador y, si dispara, cortocircuita a
+   * `human_request`. Se omite cuando `TAKEOVER_SENTIMENT_ENABLED=false`. */
+  frustrationJudge?: (sanitizedText: string) => Promise<boolean>;
 }
 
 interface ClassifyOutput {
@@ -23,13 +31,13 @@ interface ClassifyOutput {
   intent?: Intent;
 }
 
-const VALID_MESSAGE_TYPES: ReadonlySet<MessageType> = new Set<MessageType>([
+const BASE_MESSAGE_TYPES: readonly MessageType[] = [
   'greeting',
   'farewell',
   'oos',
   'action',
   'query',
-]);
+];
 
 const VALID_INTENTS: ReadonlySet<Intent> = new Set<Intent>([
   'schedule',
@@ -45,7 +53,7 @@ const FAIL_OPEN: ClassifyOutput = {
   confidence: 0.3,
 };
 
-const SYSTEM_PROMPT = `Sos un clasificador de intent para un agente de turnos.
+const BASE_SYSTEM_PROMPT = `Sos un clasificador de intent para un agente de turnos.
 Devolvé SOLO JSON con el shape {"messageType": string, "confidence": number, "intent"?: string}.
 
 messageType es uno de:
@@ -53,17 +61,31 @@ messageType es uno de:
 - "farewell"  — despedidas: chau, adiós, hasta luego, nos vemos
 - "oos"       — fuera de scope: clima, política, fútbol, chistes
 - "action"    — el usuario quiere HACER algo (agendar, cancelar, reagendar, confirmar)
-- "query"     — pregunta informativa (precio, horario, servicios, próximos turnos)
+- "query"     — pregunta informativa (precio, horario, servicios, próximos turnos)`;
 
-Si messageType="action", incluí intent con uno de:
+// Rama de la capa A: solo se inyecta cuando HUMAN_TAKEOVER_ENABLED.
+const HUMAN_REQUEST_PROMPT_LINE = `- "human_request" — el usuario pide explícitamente hablar con una PERSONA/humano/agente real, o rechaza al bot ("quiero hablar con alguien", "pasame con una persona", "no quiero un bot", "atención humana")`;
+
+const PROMPT_TAIL = `Si messageType="action", incluí intent con uno de:
 - "schedule", "reschedule", "cancel", "confirm", "unknown"
 
 confidence: número entre 0 y 1.
 
 Respondé SOLO el JSON, sin prosa ni markdown.`;
 
+function buildSystemPrompt(humanRequestEnabled: boolean): string {
+  const typeLines = humanRequestEnabled
+    ? `${BASE_SYSTEM_PROMPT}\n${HUMAN_REQUEST_PROMPT_LINE}`
+    : BASE_SYSTEM_PROMPT;
+  return `${typeLines}\n\n${PROMPT_TAIL}`;
+}
+
 export function makeClassifyIntentNode(deps: ClassifyDeps) {
-  const { llm, logger } = deps;
+  const { llm, logger, humanRequestEnabled = false, frustrationJudge } = deps;
+  const systemPrompt = buildSystemPrompt(humanRequestEnabled);
+  const validTypes = new Set<MessageType>(
+    humanRequestEnabled ? [...BASE_MESSAGE_TYPES, 'human_request'] : BASE_MESSAGE_TYPES,
+  );
 
   return async function classifyIntent(state: GraphState): Promise<GraphStateUpdate> {
     const text = sanitizeUserInput(state.input?.channelMessage?.contentText);
@@ -72,9 +94,21 @@ export function makeClassifyIntentNode(deps: ClassifyDeps) {
       return { routing: { ...FAIL_OPEN } };
     }
 
+    // Capa C: el juez de frustración corre primero y cortocircuita a
+    // `human_request` (sin gastar la call de clasificación) si dispara.
+    if (frustrationJudge && (await frustrationJudge(text))) {
+      return {
+        routing: {
+          messageType: 'human_request',
+          confidence: 1,
+          takeoverReason: 'sentiment_frustration',
+        },
+      };
+    }
+
     const response = await llm.complete({
       ...SUPERVISOR_CONFIG,
-      system: SYSTEM_PROMPT,
+      system: systemPrompt,
       messages: [{ role: 'user', content: text }],
     });
 
@@ -82,18 +116,25 @@ export function makeClassifyIntentNode(deps: ClassifyDeps) {
       component: 'classifyIntent',
     });
 
-    const normalized = normalizeOutput(parsed);
+    const normalized = normalizeOutput(parsed, validTypes);
     logger.debug('classifyIntent', { ...normalized, rawLen: response.text.length });
 
+    // Capa A: marca la razón para que `request_human` arme el disparo.
+    if (normalized.messageType === 'human_request') {
+      return { routing: { ...normalized, takeoverReason: 'explicit_request' } };
+    }
     return { routing: { ...normalized } };
   };
 }
 
-function normalizeOutput(raw: Partial<ClassifyOutput> | null): ClassifyOutput {
+function normalizeOutput(
+  raw: Partial<ClassifyOutput> | null,
+  validTypes: ReadonlySet<MessageType>,
+): ClassifyOutput {
   if (!raw || typeof raw !== 'object') return { ...FAIL_OPEN };
 
   const messageType =
-    typeof raw.messageType === 'string' && VALID_MESSAGE_TYPES.has(raw.messageType as MessageType)
+    typeof raw.messageType === 'string' && validTypes.has(raw.messageType as MessageType)
       ? (raw.messageType as MessageType)
       : FAIL_OPEN.messageType;
 

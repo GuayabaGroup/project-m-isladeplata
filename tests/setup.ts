@@ -66,6 +66,13 @@ process.env.OPENAI_QUERY_JUDGE_MODEL = process.env.OPENAI_QUERY_JUDGE_MODEL ?? '
 process.env.QUERY_JUDGE_ENABLED = process.env.QUERY_JUDGE_ENABLED ?? 'true';
 process.env.QUERY_JUDGE_FAIL_MODE = process.env.QUERY_JUDGE_FAIL_MODE ?? 'fail-open';
 
+// Takeover humano (P-human-takeover) — todas con default en env.ts; explícitas
+// acá para que los tests puedan prender los flags antes del import.
+process.env.HUMAN_TAKEOVER_ENABLED = process.env.HUMAN_TAKEOVER_ENABLED ?? 'false';
+process.env.TAKEOVER_SENTIMENT_ENABLED = process.env.TAKEOVER_SENTIMENT_ENABLED ?? 'false';
+process.env.TAKEOVER_FAILS_THRESHOLD = process.env.TAKEOVER_FAILS_THRESHOLD ?? '3';
+process.env.TAKEOVER_TTL_SECONDS = process.env.TAKEOVER_TTL_SECONDS ?? '21600';
+
 // Metrics (H8.2) — vacío en tests para no exponer endpoint por default.
 // Tests específicos del endpoint setean el valor antes de instanciar el handler.
 process.env.METRICS_API_KEY = process.env.METRICS_API_KEY ?? '';

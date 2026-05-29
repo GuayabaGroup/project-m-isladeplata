@@ -23,14 +23,18 @@ import {
   pipelineLatencyMs,
   rateLimitHitTotal,
   subgraphEnteredTotal,
+  takeoverMutedTotal,
   turnProcessedTotal,
 } from '../infrastructure/observability/metrics.js';
 import { captureIdpError } from '../infrastructure/observability/sentry.js';
+import { swallowAsync } from '../infrastructure/observability/swallowAsync.js';
 import type { DedupStore } from '../infrastructure/redis/DedupStore.js';
 import type { RateLimitStore } from '../infrastructure/redis/RateLimitStore.js';
+import type { TakeoverStore } from '../infrastructure/redis/TakeoverStore.js';
 import { sanitizeUserInput } from '../security/sanitize.js';
 import type { ConversationPersister } from './ConversationPersister.js';
 import type { ResponseDispatcher } from './ResponseDispatcher.js';
+import type { TakeoverNotifier } from './TakeoverNotifier.js';
 import type { ThreadResolver } from './ThreadResolver.js';
 import { buildWelcomeOutcome } from './welcomeFlow.js';
 
@@ -43,6 +47,8 @@ export interface PipelineDeps {
   graph: CompiledGraph;
   dispatcher: ResponseDispatcher;
   persister: ConversationPersister;
+  takeover: TakeoverStore;
+  takeoverNotifier: TakeoverNotifier;
   logger: Logger;
 }
 
@@ -70,6 +76,8 @@ export class Pipeline implements MessageProcessor {
   private readonly graph: CompiledGraph;
   private readonly dispatcher: ResponseDispatcher;
   private readonly persister: ConversationPersister;
+  private readonly takeover: TakeoverStore;
+  private readonly takeoverNotifier: TakeoverNotifier;
   private readonly logger: Logger;
 
   constructor(deps: PipelineDeps) {
@@ -81,6 +89,8 @@ export class Pipeline implements MessageProcessor {
     this.graph = deps.graph;
     this.dispatcher = deps.dispatcher;
     this.persister = deps.persister;
+    this.takeover = deps.takeover;
+    this.takeoverNotifier = deps.takeoverNotifier;
     this.logger = deps.logger;
   }
 
@@ -191,6 +201,24 @@ export class Pipeline implements MessageProcessor {
       return { action: 'ignored' };
     }
     const { tenantUuid: businessUuid, profileUuid } = internalIdentity;
+    const threadId = this.threadResolver.buildThreadId(internalIdentity);
+
+    // 4.5 Takeover gate (spec P-human-takeover). Después de resolver identidad,
+    // antes del rate-limit. Si un humano tomó la conversación, el bot calla: el
+    // turno entrante se persiste (para que quede en el historial del dashboard)
+    // pero no se genera respuesta. Lee el espejo Redis (rápido); el campo
+    // `humanControlled` de Guacuco (cuando exista) lo repuebla/invalida sin
+    // roundtrip extra.
+    if (env.HUMAN_TAKEOVER_ENABLED) {
+      await this.syncTakeoverMirror(threadId, identity.humanControlled);
+      if (await this.takeover.isHumanControlled(threadId)) {
+        const outcome: Outcome = { action: 'ignored' };
+        void this.persister.persistTurn(message, internalIdentity, outcome);
+        takeoverMutedTotal.labels({ channel: message.channelType }).inc();
+        this.logger.info('Takeover gate: bot muted (human_controlled)', { thread_id: threadId });
+        return outcome;
+      }
+    }
 
     // 5. Rate limit
     const rateResult = await this.rateLimit.checkLimit({
@@ -290,6 +318,25 @@ export class Pipeline implements MessageProcessor {
     const subgraph = (graphResult as { routing?: { activeSubgraph?: string } }).routing
       ?.activeSubgraph;
     if (subgraph) subgraphEnteredTotal.labels({ subgraph }).inc();
+
+    // 9.5 Takeover (spec P-human-takeover) — fire-and-forget, nunca bloquea.
+    // Capas A/C dejan la señal en `outcome.takeover`; capa B la detecta el
+    // contador de fallas. Todo gated por HUMAN_TAKEOVER_ENABLED.
+    if (env.HUMAN_TAKEOVER_ENABLED) {
+      void swallowAsync(
+        this.logger,
+        'takeover-postturn',
+        this.handleTakeoverAfterTurn(
+          internalIdentity,
+          threadId,
+          message,
+          outcome,
+          subgraph ?? null,
+        ),
+        { thread_id: threadId },
+      );
+    }
+
     void this.persister.persistTurn(message, internalIdentity, outcome, {
       ...(subgraph ? { subgraph } : {}),
       ...(outcome.toolCalls && outcome.toolCalls.length > 0
@@ -310,6 +357,70 @@ export class Pipeline implements MessageProcessor {
         error: err instanceof Error ? err.message : String(err),
       });
       return false;
+    }
+  }
+
+  /**
+   * Reconcilia el espejo Redis con el estado de takeover que reporta Guacuco en
+   * `resolveIdentity` (spec P-human-takeover). Si Guacuco NO emite el campo (hoy,
+   * endpoint bloqueado), no hace nada y el gate se rige solo por el espejo + TTL.
+   * `active:true` repuebla el espejo (cubre restart/TTL perdido); `active:false`
+   * lo invalida (reactivación humana desde el dashboard).
+   */
+  private async syncTakeoverMirror(
+    threadId: string,
+    humanControlled: ResolveIdentityOutput['humanControlled'],
+  ): Promise<void> {
+    if (!humanControlled) return;
+    if (humanControlled.active) {
+      await this.takeover.mirrorActive(threadId);
+    } else {
+      await this.takeover.clear(threadId);
+    }
+  }
+
+  /**
+   * Post-turno: dispara el takeover (capas A/C vía `outcome.takeover`, capa B vía
+   * contador de fallas consecutivas) o resetea el contador en un outcome
+   * exitoso. Fire-and-forget: corre dentro de `swallowAsync` y el notifier nunca
+   * lanza, así que nunca bloquea el turno.
+   */
+  private async handleTakeoverAfterTurn(
+    identity: Identity,
+    threadId: string,
+    message: ChannelMessage,
+    outcome: Outcome,
+    subgraph: string | null,
+  ): Promise<void> {
+    // Capas A/C: la señal vino adjunta al outcome (no cuenta como falla del bot).
+    if (outcome.takeover) {
+      await this.takeoverNotifier.trigger(
+        identity,
+        threadId,
+        message,
+        outcome.takeover.reasonCode,
+        subgraph,
+      );
+      await this.takeover.resetFailures(threadId);
+      return;
+    }
+
+    // Capa B: N salidas handed_off/error consecutivas → takeover.
+    if (outcome.action === 'handed_off' || outcome.action === 'error') {
+      const fails = await this.takeover.bumpFailures(threadId);
+      if (fails >= env.TAKEOVER_FAILS_THRESHOLD) {
+        await this.takeoverNotifier.trigger(
+          identity,
+          threadId,
+          message,
+          'repeated_failures',
+          subgraph,
+        );
+        await this.takeover.resetFailures(threadId);
+      }
+    } else if (outcome.action === 'response' || outcome.action === 'awaiting_user') {
+      // Outcome exitoso → resetea el contador de fallas.
+      await this.takeover.resetFailures(threadId);
     }
   }
 

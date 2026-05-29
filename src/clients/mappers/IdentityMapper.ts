@@ -27,5 +27,16 @@ export function mapRawToResolveIdentityOutput(
     isNewUser: raw.is_new_user,
     welcomeMessage: raw.welcome_message ?? null,
     onboardingUrl: raw.onboarding_url ?? null,
+    // Solo se incluye cuando Guacuco emite el campo (spec P-human-takeover, hoy
+    // bloqueado). Ausente → `humanControlled` queda undefined y el gate se rige
+    // solo por el espejo Redis + TTL.
+    ...(raw.human_controlled != null
+      ? {
+          humanControlled: {
+            active: raw.human_controlled.active,
+            expiresAt: raw.human_controlled.expires_at ?? null,
+          },
+        }
+      : {}),
   };
 }

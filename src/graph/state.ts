@@ -1,5 +1,6 @@
 import type { BaseMessage } from '@langchain/core/messages';
 import { Annotation } from '@langchain/langgraph';
+import type { TakeoverReasonCode } from '../core/enums/TakeoverReason.js';
 import { type CatalogState, EMPTY_CATALOG } from '../core/types/Catalog.js';
 import type { ChannelMessage } from '../core/types/ChannelMessage.js';
 import { type CrmContext, EMPTY_CRM_CONTEXT } from '../core/types/CrmContext.js';
@@ -18,7 +19,15 @@ export interface GraphInput {
   receivedAt: string;
 }
 
-export type MessageType = 'greeting' | 'farewell' | 'oos' | 'action' | 'query';
+export type MessageType =
+  | 'greeting'
+  | 'farewell'
+  | 'oos'
+  | 'action'
+  | 'query'
+  /** El cliente pide explícitamente un humano (capa A, spec P-human-takeover).
+   * Solo lo emite el clasificador cuando `HUMAN_TAKEOVER_ENABLED`. */
+  | 'human_request';
 export type Intent = 'schedule' | 'reschedule' | 'cancel' | 'confirm' | 'unknown';
 
 export interface RoutingState {
@@ -36,6 +45,9 @@ export interface RoutingState {
   buttonShortcut?: ButtonShortcut;
   /** Tool atómica detectada por heurística post-classifier. */
   targetTool?: ToolName;
+  /** Razón de takeover humano que la capa que disparó (A clasificador / C juez)
+   * deja para el nodo `request_human` (spec P-human-takeover). */
+  takeoverReason?: TakeoverReasonCode;
 }
 
 export const MAX_RECENT_MESSAGES = 20;
