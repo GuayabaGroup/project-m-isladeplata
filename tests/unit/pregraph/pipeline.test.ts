@@ -214,6 +214,51 @@ describe('Pipeline.process', () => {
     expect(mocks.graph.invoke).not.toHaveBeenCalled();
   });
 
+  it('P3: drops turn (ignored) when inbound role mismatches resolved profileType', async () => {
+    const { deps, mocks } = makeDeps();
+    // Línea de clientes (channelMeta.role='client' por default) pero Guacuco
+    // resuelve staff → fail-closed.
+    mocks.guacuco.resolveIdentity.mockResolvedValue(
+      fullIdentity({ profileType: 'staff', profileData: { staff_uuid: 'stf-1' } }),
+    );
+    const pipeline = new Pipeline(deps);
+
+    const outcome = await pipeline.process(
+      makeMessage({ channelMeta: { phoneNumberId: 'pn-1', role: 'client' } }),
+    );
+    expect(outcome.action).toBe('ignored');
+    expect(mocks.graph.invoke).not.toHaveBeenCalled();
+    expect(mocks.dispatcher.dispatch).not.toHaveBeenCalled();
+    expect(mocks.logger.warn).toHaveBeenCalled();
+    expect(await metric('isladeplata_role_profile_mismatch_total', { channel: 'whatsapp' })).toBe(
+      1,
+    );
+  });
+
+  it('P3: proceeds when inbound role matches profileType (staff line + staff)', async () => {
+    const { deps, mocks } = makeDeps();
+    mocks.guacuco.resolveIdentity.mockResolvedValue(
+      fullIdentity({ profileType: 'staff', profileData: { staff_uuid: 'stf-1' } }),
+    );
+    const pipeline = new Pipeline(deps);
+
+    const outcome = await pipeline.process(
+      makeMessage({ channelMeta: { phoneNumberId: 'pn-staff-1', role: 'staff' } }),
+    );
+    expect(outcome.action).toBe('response');
+    expect(mocks.graph.invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('P3: does not block when the message carries no role (non-WhatsApp meta)', async () => {
+    const { deps, mocks } = makeDeps();
+    mocks.guacuco.resolveIdentity.mockResolvedValue(fullIdentity());
+    const pipeline = new Pipeline(deps);
+
+    const outcome = await pipeline.process(makeMessage({ channelMeta: undefined }));
+    expect(outcome.action).toBe('response');
+    expect(mocks.graph.invoke).toHaveBeenCalledTimes(1);
+  });
+
   it('happy path: invokes graph and dispatches outcome', async () => {
     const { deps, mocks } = makeDeps();
     mocks.guacuco.resolveIdentity.mockResolvedValue(fullIdentity());

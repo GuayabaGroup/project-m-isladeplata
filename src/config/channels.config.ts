@@ -59,8 +59,61 @@ function parseAppSecretMap(): Map<number, string> {
   return map;
 }
 
+/**
+ * Valida invariantes cruzados del routing de canales que el shape Zod por sí solo
+ * no cubre (fail-fast al boot, §3 bootstrap / §13.1 REGLAS). Pura y exportada para
+ * poder testearla sin tocar `env`:
+ *
+ *  1. **(role, platformId) único** — el outbound (`resolveWhatsAppPhoneByRole`) hace
+ *     first-match; dos phoneNumberIds con el mismo par routearían a uno solo de forma
+ *     silenciosa. Un duplicado en el JSON debe romper el boot, no degradar el routing.
+ *  2. **Cobertura de app_secret** — todo `platformId` referenciado por el channel map
+ *     debe tener su secret en `APP_SECRET_BY_PLATFORM`, o el webhook entrante de esa
+ *     plataforma respondería 403 en runtime en vez de fallar al arrancar. Se omite
+ *     cuando `skipSignature` (dev: `WHATSAPP_SKIP_SIGNATURE=true` permite operar sin
+ *     `APP_SECRET_BY_PLATFORM_JSON`, ver `env.ts`).
+ *
+ * Lanza `IdpError('invalid_env', ...)` al primer problema (mismo error que el parse).
+ */
+export function validateChannelConsistency(
+  channelMap: ReadonlyMap<string, WhatsAppPhoneConfig>,
+  appSecretMap: ReadonlyMap<number, string>,
+  skipSignature: boolean,
+): void {
+  // 1. (role, platformId) único.
+  const seenByRolePlatform = new Map<string, string>();
+  for (const [phoneNumberId, cfg] of channelMap) {
+    const key = `${cfg.role}:${cfg.platformId}`;
+    const existing = seenByRolePlatform.get(key);
+    if (existing) {
+      throw new IdpError(
+        'invalid_env',
+        `WHATSAPP_CHANNEL_MAP_JSON has duplicate (role, platformId)=(${cfg.role}, ${cfg.platformId}) for phone_number_ids ${existing} and ${phoneNumberId}`,
+      );
+    }
+    seenByRolePlatform.set(key, phoneNumberId);
+  }
+
+  // 2. Cobertura de app_secret por plataforma (salvo dev sin firma).
+  if (skipSignature) return;
+  for (const [phoneNumberId, cfg] of channelMap) {
+    if (!appSecretMap.has(cfg.platformId)) {
+      throw new IdpError(
+        'invalid_env',
+        `APP_SECRET_BY_PLATFORM_JSON is missing a secret for platform_id=${cfg.platformId} (referenced by phone_number_id ${phoneNumberId})`,
+      );
+    }
+  }
+}
+
 export const WHATSAPP_CHANNEL_MAP: ReadonlyMap<string, WhatsAppPhoneConfig> = parseChannelMap();
 export const APP_SECRET_BY_PLATFORM: ReadonlyMap<number, string> = parseAppSecretMap();
+
+validateChannelConsistency(
+  WHATSAPP_CHANNEL_MAP,
+  APP_SECRET_BY_PLATFORM,
+  env.WHATSAPP_SKIP_SIGNATURE,
+);
 
 /** Lookup config by inbound `phone_number_id` (the WA number that received the message). */
 export function resolveWhatsAppByPhoneNumberId(phoneNumberId: string): WhatsAppPhoneConfig | null {

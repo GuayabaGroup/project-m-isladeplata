@@ -68,6 +68,13 @@ export const takeoverMutedTotal = new Counter({
   registers: [metricsRegistry],
 });
 
+export const roleProfileMismatchTotal = new Counter({
+  name: 'isladeplata_role_profile_mismatch_total',
+  help: 'Turnos descartados (fail-closed) porque el rol de la línea entrante no coincide con el profileType resuelto.',
+  labelNames: ['channel'],
+  registers: [metricsRegistry],
+});
+
 export const pipelineLatencyMs = new Histogram({
   name: 'isladeplata_pipeline_latency_ms',
   help: 'Latencia end-to-end del pipeline en milisegundos.',
@@ -89,5 +96,6 @@ export function resetMetrics(): void {
   persistTurnTotal.reset();
   takeoverTotal.reset();
   takeoverMutedTotal.reset();
+  roleProfileMismatchTotal.reset();
   pipelineLatencyMs.reset();
 }

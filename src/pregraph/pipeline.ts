@@ -7,6 +7,7 @@ import type { ParguitoClient } from '../clients/ParguitoClient.js';
 import type { HelpersListEntry, ResolveIdentityOutput } from '../clients/types/GuacucoTypes.js';
 import { env } from '../config/env.js';
 import { IdentityNotFoundError } from '../core/errors/IdentityNotFoundError.js';
+import { IdpError } from '../core/errors/IdpError.js';
 import { type CatalogService, type CatalogState, EMPTY_CATALOG } from '../core/types/Catalog.js';
 import type { ChannelMessage } from '../core/types/ChannelMessage.js';
 import {
@@ -22,6 +23,7 @@ import {
   identityNotFoundTotal,
   pipelineLatencyMs,
   rateLimitHitTotal,
+  roleProfileMismatchTotal,
   subgraphEnteredTotal,
   takeoverMutedTotal,
   turnProcessedTotal,
@@ -200,6 +202,42 @@ export class Pipeline implements MessageProcessor {
       });
       return { action: 'ignored' };
     }
+    // 4.1 Guard de coherencia rol↔perfil (fail-closed, §12.2 REGLAS). El rol de la
+    // línea WhatsApp entrante (`channelMeta.role`) y el `profileType` resuelto por
+    // Guacuco DEBEN coincidir — el número es por (plataforma, rol). Si divergen, la
+    // línea de atención no corresponde al perfil resuelto: responderíamos desde una
+    // línea (la del rol) procesando con tools/schema del otro rol → cruce de
+    // información. Anomalía de seguridad ("no debería pasar" por §12.2): descartamos
+    // el turno (silent skip, como identity-not-found) y lo dejamos visible en
+    // logs/Sentry/métrica. Solo aplica a canales que portan `role` (WhatsApp).
+    const inboundRole = message.channelMeta?.role;
+    if (inboundRole && inboundRole !== internalIdentity.profileType) {
+      this.logger.warn('Role/profileType mismatch — dropping turn (fail-closed)', {
+        channelType: message.channelType,
+        messageId: message.messageId,
+        inboundRole,
+        profileType: internalIdentity.profileType,
+        platformId: internalIdentity.platformId,
+      });
+      captureIdpError(
+        new IdpError(
+          'role_profile_mismatch',
+          'Inbound channel role does not match resolved profileType',
+          {
+            inboundRole,
+            profileType: internalIdentity.profileType,
+          },
+        ),
+        {
+          component: 'Pipeline.processInternal',
+          channelType: message.channelType,
+          messageId: message.messageId,
+        },
+      );
+      roleProfileMismatchTotal.labels({ channel: message.channelType }).inc();
+      return { action: 'ignored' };
+    }
+
     const { tenantUuid: businessUuid, profileUuid } = internalIdentity;
     const threadId = this.threadResolver.buildThreadId(internalIdentity);
 
