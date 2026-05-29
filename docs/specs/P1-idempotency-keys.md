@@ -4,6 +4,13 @@
 > **Consumidor**: `project-m-isladeplata` (agente conversacional con LangGraph)
 > **Prioridad**: P1 — debería estar desplegado antes de Hito 4 del sprint Isladeplata (subgrafo `schedule_appointment`).
 > **Esfuerzo estimado**: bajo (1 tabla + wrapper sobre execute + 1 job de recovery).
+> **Estado (2026-05-29)**: ✅ **IMPLEMENTADO en Guacuco**. El agente ya enviaba
+> `idempotency_key` top-level; Guacuco lo descartaba. Ahora lo honra:
+> migración `v2_008_tool_idempotency_keys.sql`, `PgToolIdempotencyRepository`
+> (con reclamo de lock stale **inline** → sin job de recovery separado), wrapper
+> en `ExecuteToolUseCase`, `IDEMPOTENT_REQUEST_IN_PROGRESS`→409, job diario de
+> cleanup en `Container.initializeSchedulers`. Sin prom-metrics (Guacuco no tiene
+> infra) → logs estructurados. Ver desvíos en "Definition of Done".
 
 ---
 
@@ -170,10 +177,10 @@ Job diario que borra filas con `created_at < NOW() - INTERVAL '7 days'` (despué
 
 ## Definition of Done
 
-- [ ] Migration de schema aplicada.
-- [ ] Lógica del wrapper en `ExecuteToolUseCase` (o equivalente) cubre los 12 casos de test.
-- [ ] Job de recovery configurado en el worker scheduler.
-- [ ] Job de cleanup periódico configurado.
-- [ ] Documentación del campo `idempotency_key` actualizada en `docs/tools.md`.
-- [ ] Métricas expuestas y verificadas en dashboard.
-- [ ] Cross-business protection validada: write con `business_allia_id` de otro tenant + idempotency key → sigue retornando `BUSINESS_MISMATCH` (la idempotency NO bypassea la validación de tenant).
+- [x] Migration de schema aplicada (`v2_008_tool_idempotency_keys.sql`). ⚠️ aplicar en cada entorno (Guacuco no tiene runner — se corre por SQL).
+- [x] Lógica del wrapper en `ExecuteToolUseCase` (tests unitarios Jest cubren success/replay/in-progress/no-write/uuid-inválido/sin-business/store-caído/handler-falla/handler-throws).
+- [x] ~~Job de recovery~~ → reemplazado por **reclamo de lock stale inline** en `tryAcquire` (`INSERT … ON CONFLICT DO UPDATE … WHERE status='in_progress' AND expires_at < NOW()`): un huérfano se reclama en el próximo replay tras el TTL, sin worker aparte.
+- [x] Job de cleanup periódico configurado (`Container.initializeSchedulers`, diario 03:30, borra filas > 7 días).
+- [ ] Documentación del campo `idempotency_key` en `docs/tools.md` (pendiente; vive en esta spec + JSDoc del DTO).
+- [ ] ~~Métricas expuestas en dashboard~~ → **desviado**: Guacuco no tiene prom-client; se emiten logs estructurados en replay/reclaim/cleanup. Reabrir si se agrega infra de métricas.
+- [x] Cross-business protection intacta: la idempotencia se escopa por `business_uuid` y NO bypassea la validación de tenant del handler (el handler corre igual la primera vez; un replay devuelve el resultado original, incluido un `BUSINESS_MISMATCH` si así terminó).

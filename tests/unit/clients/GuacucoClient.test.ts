@@ -60,6 +60,7 @@ function makeMockHttp() {
   return {
     get: vi.fn(),
     post: vi.fn(),
+    patch: vi.fn(),
   };
 }
 
@@ -820,23 +821,60 @@ describe('GuacucoClient.triggerTakeover', () => {
     idempotency_key: 'biz-1:cli-1:whatsapp:1:660e8400',
   };
 
-  it('posts payload to /api/v1/conversations/takeover and returns result', async () => {
+  it('PATCHes the real support-mode endpoint with the mapped body', async () => {
     const mockHttp = makeMockHttp();
-    mockHttp.post.mockResolvedValue(
-      makeResponse({ success: true, data: { takeover_id: 'tk-1', created: true } }, 201),
+    mockHttp.patch.mockResolvedValue(
+      makeResponse({ success: true, data: { conversation_id: 'conv-1', support_mode: true } }, 200),
     );
 
     const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
     const result = await client.triggerTakeover(samplePayload);
 
-    expect(result).toEqual({ takeover_id: 'tk-1', created: true });
-    expect(mockHttp.post).toHaveBeenCalledWith('/api/v1/conversations/takeover', samplePayload);
+    // Internal contract preserved: conversation_id → takeover_id, support_mode → created.
+    expect(result).toEqual({ takeover_id: 'conv-1', created: true });
+    expect(mockHttp.patch).toHaveBeenCalledWith(
+      '/api/v1/short-term-memory/conversations/support-mode',
+      {
+        profile_uuid: 'cli-1',
+        context_code: 'whatsapp',
+        support_mode: true,
+        activated_by: 'system',
+        notify_support: true,
+        trigger_message: 'quiero hablar con alguien',
+        escalation_reason:
+          'explicit_request: El cliente pidió explícitamente hablar con una persona.',
+      },
+    );
   });
 
-  it('returns created=false on duplicate (idempotent)', async () => {
+  it('folds reason_code + subgraph into escalation_reason when a subgraph is active', async () => {
     const mockHttp = makeMockHttp();
-    mockHttp.post.mockResolvedValue(
-      makeResponse({ success: true, data: { takeover_id: 'tk-1', created: false } }, 200),
+    mockHttp.patch.mockResolvedValue(
+      makeResponse({ success: true, data: { conversation_id: 'conv-1', support_mode: true } }, 200),
+    );
+
+    const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
+    await client.triggerTakeover({
+      ...samplePayload,
+      reason_code: 'repeated_failures',
+      subgraph: 'schedule',
+    });
+
+    expect(mockHttp.patch).toHaveBeenCalledWith(
+      '/api/v1/short-term-memory/conversations/support-mode',
+      expect.objectContaining({
+        escalation_reason: expect.stringContaining('repeated_failures (schedule):'),
+      }),
+    );
+  });
+
+  it('maps created=false when support_mode comes back false', async () => {
+    const mockHttp = makeMockHttp();
+    mockHttp.patch.mockResolvedValue(
+      makeResponse(
+        { success: true, data: { conversation_id: 'conv-1', support_mode: false } },
+        200,
+      ),
     );
 
     const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);
@@ -846,8 +884,8 @@ describe('GuacucoClient.triggerTakeover', () => {
 
   it('propagates backend errors as ToolExecutionError', async () => {
     const mockHttp = makeMockHttp();
-    mockHttp.post.mockResolvedValue(
-      makeResponse({ success: false, error: { code: 'BUSINESS_NOT_FOUND', message: 'x' } }),
+    mockHttp.patch.mockResolvedValue(
+      makeResponse({ success: false, error: { code: 'CONVERSATION_NOT_FOUND', message: 'x' } }),
     );
 
     const client = new GuacucoClient(mockHttp as unknown as RetryClient, mockLogger);

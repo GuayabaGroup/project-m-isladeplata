@@ -7,10 +7,17 @@
 > Guacuco y pueden ir primero detrás del flag.
 > **Esfuerzo estimado**: medio (estado nuevo por conversación + gate en pre-grafo +
 > detección en capas + endpoint/flag en Guacuco para la reactivación humana).
-> **Estado**: PARCIALMENTE BLOQUEADO en Guacuco. La detección + el silenciado del
-> bot (capas A/B con espejo en Redis) se pueden cablear hoy en isladeplata; la
-> **reactivación explícita desde el dashboard** y la persistencia como fuente de
-> verdad requieren el endpoint/flag en Guacuco. Esta spec define el contrato.
+> **Estado (2026-05-29)**: ✅ **DESBLOQUEADO** — Guacuco YA tenía el feature, con
+> otro contrato del que esta spec asumía. No existe `POST /conversations/takeover`;
+> el takeover vive en **`PATCH /api/v1/short-term-memory/conversations/support-mode`**
+> (`support_mode=true` + `notify_support=true`), keyed por `(profile_uuid,
+> context_code)`. Ese mismo endpoint cubre la **escalación** (alerta al staff por
+> WhatsApp), o sea fusiona P-human-takeover + P-escalation. `GuacucoClient.triggerTakeover`
+> ya traduce el contrato interno del agente a ese PATCH (vía `RetryClient.patch`).
+> Pendiente: la **reactivación explícita desde el dashboard** (volver a dar control
+> al bot) ya existe como `support_mode=false` con `activated_by='staff'` — falta
+> que el dashboard lo invoque. El TTL de seguridad lo aplica el agente vía Redis
+> (`TakeoverStore`), no Guacuco.
 
 ---
 

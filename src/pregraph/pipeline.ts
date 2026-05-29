@@ -180,7 +180,11 @@ export class Pipeline implements MessageProcessor {
 
     // 3. Welcome flow para new staff (Guacuco auto-onboardea silenciosamente)
     if (identity.isNewUser) {
-      const outcome = buildWelcomeOutcome(identity.welcomeMessage, identity.onboardingUrl);
+      const outcome = buildWelcomeOutcome(
+        identity.welcomeMessage,
+        identity.onboardingUrl,
+        identity.businessStaffRoles?.platform_id ?? null,
+      );
       subgraphEnteredTotal.labels({ subgraph: 'welcome' }).inc();
       await this.dispatcher.dispatch(message, outcome);
       const welcomeIdentity = toInternalIdentityOrNull(identity, message);

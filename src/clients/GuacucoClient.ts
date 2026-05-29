@@ -35,6 +35,8 @@ import type {
   ResolveIdentityOutput,
   ScheduleAppointmentParams,
   ScheduleAppointmentResult,
+  ToggleSupportModeRequest,
+  ToggleSupportModeResponse,
   ToolContext,
   ToolExecuteRequest,
   ToolExecuteResponse,
@@ -50,7 +52,7 @@ const TOOL_EXECUTE_PATH = '/api/v1/tools/execute';
 const QUERY_TABLES_PATH = '/api/v1/query-processor/tables';
 const QUERY_EXECUTE_PATH = '/api/v1/query-processor/query';
 const PERSIST_AGENT_TURNS_PATH = '/api/v1/conversations/agent-turns';
-const TAKEOVER_PATH = '/api/v1/conversations/takeover';
+const SUPPORT_MODE_PATH = '/api/v1/short-term-memory/conversations/support-mode';
 const RECENT_TEMPLATES_PATH = '/api/v1/template-send-log/recent';
 
 /**
@@ -467,17 +469,38 @@ export class GuacucoClient extends BaseHttpClient {
   // ==========================================================================
 
   /**
-   * Registra un takeover humano para un thread (`human_controlled`). Idempotente
-   * por `(tenant_allia_id, idempotency_key)`: reenvíos retornan `created: false`
-   * (mismo patrón de P1/P2). Guacuco aplica el `ttl_seconds` server-side.
+   * Activa el takeover humano (`human_controlled`): silencia el bot en esa
+   * conversación y notifica al negocio.
    *
-   * ⚠️ Pendiente backend: Guacuco NO expone hoy `POST /conversations/takeover`
-   * (endpoint bloqueado en la spec). La llamada queda estandarizada del lado de
-   * IDP; retornará error hasta que el endpoint exista. Por eso el caller
-   * (`TakeoverNotifier`) la invoca fire-and-forget y NUNCA bloquea el turno.
+   * Traduce el contrato interno del agente (`TriggerTakeoverRequest`, keyed por
+   * `thread_id`/`reason_code`) al contrato REAL de Guacuco: `PATCH
+   * /short-term-memory/conversations/support-mode` con `support_mode=true` +
+   * `notify_support=true`, keyed por `(profile_uuid, context_code)`. Guacuco no
+   * expone un endpoint `takeover` separado — el feature vive en support-mode,
+   * que también cubre la escalación (alerta al staff por WhatsApp).
+   *
+   * El `ttl_seconds` no se envía: el agente lo aplica vía su espejo en Redis
+   * (`TakeoverStore`). `created` se deriva del `support_mode` resultante.
+   *
+   * Lo invoca `TakeoverNotifier` fire-and-forget — NUNCA bloquea el turno.
    */
   async triggerTakeover(payload: TriggerTakeoverRequest): Promise<TriggerTakeoverResult> {
-    const response = await this.http.post<Envelope<TriggerTakeoverResult>>(TAKEOVER_PATH, payload);
-    return this.unwrap<TriggerTakeoverResult>(response);
+    const body: ToggleSupportModeRequest = {
+      profile_uuid: payload.profile_uuid,
+      context_code: payload.channel,
+      support_mode: true,
+      activated_by: 'system',
+      notify_support: true,
+      trigger_message: payload.last_user_message,
+      escalation_reason: payload.subgraph
+        ? `${payload.reason_code} (${payload.subgraph}): ${payload.summary}`
+        : `${payload.reason_code}: ${payload.summary}`,
+    };
+    const response = await this.http.patch<Envelope<ToggleSupportModeResponse>>(
+      SUPPORT_MODE_PATH,
+      body,
+    );
+    const data = this.unwrap<ToggleSupportModeResponse>(response);
+    return { takeover_id: data.conversation_id, created: data.support_mode };
   }
 }

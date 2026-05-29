@@ -451,9 +451,16 @@ export interface PersistAgentTurnsResponse {
 }
 
 // ============================================================================
-// Takeover humano — POST /api/v1/conversations/takeover (spec P-human-takeover)
+// Takeover humano (spec P-human-takeover)
 // Fire-and-forget desde el agente al auto-detectar (capas A/B/C).
-// Idempotente por (tenant_allia_id, idempotency_key) a nivel de Guacuco.
+//
+// Contrato INTERNO del agente (`TriggerTakeoverRequest`/`Result`): lo produce
+// `TakeoverNotifier` con el vocabulario del agente (thread_id, reason_code…).
+// `GuacucoClient.triggerTakeover` lo traduce al contrato REAL de Guacuco
+// (`PATCH /api/v1/short-term-memory/conversations/support-mode`, ver
+// `ToggleSupportMode*`), que es donde vive el feature de takeover/escalación
+// fusionado (silencia el bot + notifica al negocio). Guacuco lo clavetea por
+// (profile_uuid, context_code).
 // ============================================================================
 
 export interface TriggerTakeoverRequest {
@@ -481,6 +488,30 @@ export interface TriggerTakeoverResult {
   takeover_id: string;
   /** `false` cuando ya había un takeover activo para ese `thread_id`. */
   created: boolean;
+}
+
+// ----------------------------------------------------------------------------
+// Contrato REAL de Guacuco — PATCH /api/v1/short-term-memory/conversations/support-mode
+// `support_mode=true` + `notify_support=true` silencia el bot y alerta al negocio.
+// ----------------------------------------------------------------------------
+
+export interface ToggleSupportModeRequest {
+  profile_uuid: string;
+  /** Canal del agente mapeado a `context_code` de Guacuco (ej. 'whatsapp'). */
+  context_code: string;
+  support_mode: boolean;
+  /** 'system' cuando lo dispara la auto-detección del agente; 'staff' si es manual. */
+  activated_by: 'system' | 'staff';
+  notify_support?: boolean;
+  customer_wa_id?: string;
+  customer_name?: string;
+  trigger_message?: string;
+  escalation_reason?: string;
+}
+
+export interface ToggleSupportModeResponse {
+  conversation_id: string;
+  support_mode: boolean;
 }
 
 // confirm_appointment

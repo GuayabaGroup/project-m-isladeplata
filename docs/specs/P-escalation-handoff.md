@@ -6,8 +6,16 @@
 > promete "un humano te va a contactar" pero **no notifica a nadie**.
 > **Esfuerzo estimado**: bajo-medio (endpoint nuevo + cola/notificación; reusa
 > el patrón de `forward_message` que ya existe).
-> **Estado**: BLOQUEADO en Guacuco (el endpoint no existe). Esta spec define el
-> contrato; el cableado en isladeplata es chico una vez disponible.
+> **Estado (2026-05-29)**: ⚠️ **REVISAR** — el endpoint dedicado
+> `POST /api/v1/conversations/escalations` que esta spec propone **no existe ni se
+> implementó**. La necesidad (silenciar + notificar al negocio) ya la cubre
+> `PATCH /api/v1/short-term-memory/conversations/support-mode` con `notify_support=true`
+> (ver [P-human-takeover](./P-human-takeover.md)), que alerta al staff por WhatsApp.
+> Decisión pendiente: ¿basta con reusar support-mode para los `handed_off` de
+> subgrafo, o se quiere una cola de tickets `open/closed` separada en el dashboard?
+> Por ahora un `handed_off` puede disparar `triggerTakeover` (support-mode) en vez
+> de dejar la promesa sin cumplir. El resto de esta spec queda como diseño de la
+> cola dedicada por si se decide construirla.
 
 ---
 

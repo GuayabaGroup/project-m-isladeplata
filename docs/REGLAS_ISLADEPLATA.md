@@ -282,6 +282,7 @@ El pre-grafo es **código TS secuencial**, NO un LangGraph. Razón: los pasos qu
 
 - **Staff sin business** → Guacuco auto-onboarda silenciosamente, response normal con `isNewUser=true`.
 - **Cliente sin business** (`USER_NOT_FOUND`) → **silent skip**: no se responde. NO entra al grafo, NO se loguea como error.
+- **Formateo del welcome** (`buildWelcomeOutcome`, determinístico, **sin LLM**): el texto es el `welcomeMessage` que ya produjo Guacuco; si viene `null`, fallback `'Bienvenido/a a {brand}'` resolviendo la marca por `platformId` (`resolvePlatformBrand` en `config/platformBrand.ts`, default `Allia`). Si hay `onboardingUrl` → CTA con `displayText: 'Acceder a mi cuenta'` (paridad con el onboarding del IDP legacy); si no, solo texto.
 
 ### 7.3 — TTL del checkpoint
 

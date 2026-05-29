@@ -51,6 +51,14 @@ export class RetryClient {
     return this.withRetry(() => this.axios.post<T>(url, body, config), `POST ${url}`);
   }
 
+  async patch<T>(
+    url: string,
+    body?: unknown,
+    config?: AxiosRequestConfig,
+  ): Promise<AxiosResponse<T>> {
+    return this.withRetry(() => this.axios.patch<T>(url, body, config), `PATCH ${url}`);
+  }
+
   private async withRetry<T>(
     fn: () => Promise<AxiosResponse<T>>,
     label: string,
