@@ -15,7 +15,12 @@ import type { Outcome } from '../core/types/Outcome.js';
 import type { PlatformContentLoader } from '../infrastructure/content/PlatformContentLoader.js';
 import type { LlmProvider } from '../infrastructure/llm/LlmProvider.js';
 import { sanitizeUserInput } from '../security/sanitize.js';
-import { type GraphState, GraphStateAnnotation, type GraphStateUpdate } from './state.js';
+import {
+  type GraphState,
+  GraphStateAnnotation,
+  type GraphStateUpdate,
+  type RoutingState,
+} from './state.js';
 // Cancel subgraph (H5)
 import { makeCancelAskSlotNode } from './subgraphs/cancel/nodes/askSlot.js';
 import { makeCancelBootstrapNode } from './subgraphs/cancel/nodes/bootstrap.js';
@@ -494,6 +499,28 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
 
 type ActiveSubgraph = 'schedule' | 'confirm' | 'cancel' | 'reschedule' | 'query';
 
+/**
+ * Campos de `routing` que son PER-TURNO: el supervisor los recomputa en cada
+ * turno (atajo button, heurística de tool, salida del classifier). Como el canal
+ * `routing` se mergea y persiste en el checkpoint (`mergeRouting`, state.ts), si
+ * no se limpian sobreviven y contaminan el turno siguiente. El caso real
+ * observado: un `buttonShortcut` de un tap previo ("Cancelar cita") sobrevive y
+ * desvía un texto libre posterior a `subgraph_placeholder` → "Esa opción ya no
+ * está disponible…", en vez de dejar que el classifier interprete el mensaje.
+ *
+ * Se limpian al ABRIR el turno (mismo espíritu que el reset de `outcome`).
+ * `activeSubgraph`/`handoff` NO van acá: son estado de flujo cross-turno (resume);
+ * `finalize` es quien limpia `activeSubgraph` al completar un subgrafo.
+ */
+const ROUTING_TURN_RESET: Partial<RoutingState> = {
+  buttonShortcut: undefined,
+  targetTool: undefined,
+  messageType: undefined,
+  intent: undefined,
+  confidence: undefined,
+  takeoverReason: undefined,
+};
+
 function supervisorEntryNode(state: GraphState): GraphStateUpdate {
   const message = state.input?.channelMessage;
   if (!message) return {};
@@ -527,7 +554,7 @@ function supervisorEntryNode(state: GraphState): GraphStateUpdate {
     active === 'reschedule' ||
     active === 'query'
   ) {
-    return { ...turnReset, routing: { activeSubgraph: active } };
+    return { ...turnReset, routing: { ...ROUTING_TURN_RESET, activeSubgraph: active } };
   }
 
   // Botones de templates de Guacuco (recordatorios): la acción se deriva del
@@ -551,12 +578,14 @@ function supervisorEntryNode(state: GraphState): GraphStateUpdate {
       );
       if (resolved) finalShortcut = { ...shortcut, value: resolved };
     }
-    return { ...turnReset, routing: { buttonShortcut: finalShortcut } };
+    return { ...turnReset, routing: { ...ROUTING_TURN_RESET, buttonShortcut: finalShortcut } };
   }
 
   const text = sanitizeUserInput(message.contentText);
   const targetTool = text.length > 0 ? detectAtomicTool(text) : null;
-  return targetTool ? { ...turnReset, routing: { targetTool } } : turnReset;
+  return targetTool
+    ? { ...turnReset, routing: { ...ROUTING_TURN_RESET, targetTool } }
+    : { ...turnReset, routing: { ...ROUTING_TURN_RESET } };
 }
 
 function supervisorEntryRouter(

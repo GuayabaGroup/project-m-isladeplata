@@ -378,6 +378,56 @@ describe('compileGraph (supervisor wiring)', () => {
     expect(create.mock.calls.length).toBeGreaterThan(callsAfterTurn1);
   });
 
+  it('stale buttonShortcut from a prior button tap does NOT hijack the next free-text turn', async () => {
+    // Regresión: `routing` es un canal persistido + mergeado en el checkpoint.
+    // Un `buttonShortcut` seteado por un tap previo (turno 1) sobrevivía al turno
+    // siguiente; `supervisorEntryRouter`/`routeFromSupervisor` lo leían y desviaban
+    // el texto libre a `subgraph_placeholder` → "Esa opción ya no está disponible",
+    // sin correr el classifier. El reset per-turno en `supervisorEntryNode` lo corrige.
+    const { llm, create } = makeMultiReplyLlm([
+      '{"messageType":"greeting","confidence":0.95}', // turno 2: classifier
+      '¡Hola de nuevo! ¿En qué te ayudo?', // turno 2: social
+    ]);
+    const { guacuco } = makeGuacuco();
+    const graph = compileGraph({ checkpointer, logger: mockLogger, llm, guacuco });
+    const threadId = 'th-stale-shortcut';
+
+    // Turno 1: tap de botón confirm:<uuid> sin subgrafo activo → placeholder, sin LLM.
+    // Setea routing.buttonShortcut, que queda persistido en el checkpoint.
+    const turn1 = await graph.invoke(
+      {
+        input: {
+          channelMessage: makeMessage('', { type: 'button', id: 'confirm:abc-123' }),
+          receivedAt: new Date().toISOString(),
+        },
+        identity: IDENTITY_CLIENT,
+        crmContext: EMPTY_CRM_CONTEXT,
+      },
+      { configurable: { thread_id: threadId } },
+    );
+    expect(turn1.outcome?.pendingReply?.text).toMatch(/ya no está disponible/i);
+    expect(create).not.toHaveBeenCalled(); // turno 1 bypaseó el LLM
+
+    // Turno 2: texto libre. NO debe heredar el buttonShortcut del turno 1.
+    const turn2 = await graph.invoke(
+      {
+        input: {
+          channelMessage: makeMessage('hola, una consulta'),
+          receivedAt: new Date().toISOString(),
+        },
+        identity: IDENTITY_CLIENT,
+        crmContext: EMPTY_CRM_CONTEXT,
+      },
+      { configurable: { thread_id: threadId } },
+    );
+
+    // El texto libre NO cae en el placeholder de botón stale…
+    expect(turn2.outcome?.pendingReply?.text).not.toMatch(/ya no está disponible/i);
+    expect(turn2.outcome?.pendingReply?.text).toContain('Hola');
+    // …y el classifier DEBE haber corrido (no se cortocircuitó por el shortcut stale).
+    expect(create).toHaveBeenCalled();
+  });
+
   it('returns ignored outcome when input is missing', async () => {
     const { llm, create } = makeLlmStub('unused');
     const { guacuco } = makeGuacuco();
