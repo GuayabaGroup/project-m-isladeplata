@@ -87,6 +87,7 @@ import { forwardMessage } from './tools/support/forwardMessage.js';
 import { connectMercadoPago } from './tools/system/connectMercadoPago.js';
 import { generateVerificationUrl } from './tools/system/generateVerificationUrl.js';
 import { retrieveManzanilloUrl } from './tools/system/retrieveManzanilloUrl.js';
+import { sendClientSummary } from './tools/system/sendClientSummary.js';
 
 export interface CompiledGraph {
   invoke(
@@ -263,14 +264,25 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
 
   const wrapTool = (t: AtomicTool) => async (state: GraphState) => t.run(state, toolDeps);
 
+  // Nodo finalize ÚNICO compartido por los 4 subgrafos write + query. Antes eran
+  // 5 nodos (`schedule_finalize`, `confirm_finalize`, …) registrando la MISMA
+  // función `subgraphFinalize`; se colapsan en `subgraph_finalize` para no crecer
+  // el número de nodos del StateGraph (el chain `.addNode` está al límite de la
+  // profundidad de instanciación de tipos de TS — TS2589 — y cada nodo nuevo lo
+  // desborda). Es seguro: por turno hay un solo subgrafo activo → una sola arista
+  // entrante dispara; el handler es genérico (lee `subgraphState.__kind`). Los
+  // routers condicionales NO cambian — siguen devolviendo las keys `*_finalize`,
+  // que los mapas de abajo apuntan al nodo compartido.
   const builder = new StateGraph(GraphStateAnnotation)
     .addNode('supervisor_entry', supervisorEntryNode)
     .addNode('classify_intent', classifyIntent)
     .addNode('social_responder', socialResponder)
     .addNode('subgraph_placeholder', subgraphPlaceholderNode)
+    .addNode('subgraph_finalize', subgraphFinalize)
     .addNode('tool_retrieve_manzanillo_url', wrapTool(retrieveManzanilloUrl))
     .addNode('tool_generate_verification_url', wrapTool(generateVerificationUrl))
     .addNode('tool_connect_mercado_pago', wrapTool(connectMercadoPago))
+    .addNode('tool_send_client_summary', wrapTool(sendClientSummary))
     .addNode('tool_forward_message', wrapTool(forwardMessage))
     // Schedule subgraph nodes (inlined en parent)
     .addNode('schedule_dispatch', scheduleDispatchNode)
@@ -283,14 +295,12 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
     .addNode('schedule_gate', wrapSchedule(scheduleGate))
     .addNode('schedule_commit', wrapScheduleAsync(scheduleCommit))
     .addNode('schedule_success', wrapScheduleAsync(scheduleSuccess))
-    .addNode('schedule_finalize', subgraphFinalize)
     // Confirm subgraph nodes
     .addNode('confirm_dispatch', confirmDispatchNode)
     .addNode('confirm_bootstrap', wrapSchedule(confirmBootstrap))
     .addNode('confirm_ask_slot', wrapSchedule(confirmAskSlot))
     .addNode('confirm_commit', wrapScheduleAsync(confirmCommit))
     .addNode('confirm_success', wrapScheduleAsync(confirmSuccess))
-    .addNode('confirm_finalize', subgraphFinalize)
     // Cancel subgraph nodes
     .addNode('cancel_dispatch', cancelDispatchNode)
     .addNode('cancel_bootstrap', wrapSchedule(cancelBootstrap))
@@ -299,7 +309,6 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
     .addNode('cancel_gate', wrapSchedule(cancelGate))
     .addNode('cancel_commit', wrapScheduleAsync(cancelCommit))
     .addNode('cancel_success', wrapScheduleAsync(cancelSuccess))
-    .addNode('cancel_finalize', subgraphFinalize)
     // Reschedule subgraph nodes
     .addNode('reschedule_dispatch', rescheduleDispatchNode)
     .addNode('reschedule_bootstrap', wrapSchedule(rescheduleBootstrap))
@@ -310,13 +319,11 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
     .addNode('reschedule_gate', wrapSchedule(rescheduleGate))
     .addNode('reschedule_commit', wrapScheduleAsync(rescheduleCommit))
     .addNode('reschedule_success', wrapScheduleAsync(rescheduleSuccess))
-    .addNode('reschedule_finalize', subgraphFinalize)
     // Query subgraph nodes (H7)
     .addNode('query_dispatch', queryDispatchNode)
     .addNode('query_classify', wrapScheduleAsync(queryClassify))
     .addNode('query_fetch', wrapScheduleAsync(queryFetch))
-    .addNode('query_synthesize', wrapScheduleAsync(querySynthesize))
-    .addNode('query_finalize', subgraphFinalize);
+    .addNode('query_synthesize', wrapScheduleAsync(querySynthesize));
 
   const compiled = builder
     .addEdge(START, 'supervisor_entry')
@@ -329,6 +336,7 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
       cancel_dispatch: 'cancel_dispatch',
       reschedule_dispatch: 'reschedule_dispatch',
       query_dispatch: 'query_dispatch',
+      tool_send_client_summary: 'tool_send_client_summary',
     })
     .addConditionalEdges('classify_intent', routeFromSupervisorWithSubgraphs, {
       social_responder: 'social_responder',
@@ -345,9 +353,11 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
     })
     .addEdge('social_responder', END)
     .addEdge('subgraph_placeholder', END)
+    .addEdge('subgraph_finalize', END)
     .addEdge('tool_retrieve_manzanillo_url', END)
     .addEdge('tool_generate_verification_url', END)
     .addEdge('tool_connect_mercado_pago', END)
+    .addEdge('tool_send_client_summary', END)
     .addEdge('tool_forward_message', END)
     // Schedule wiring
     .addEdge('schedule_dispatch', 'schedule_entry')
@@ -355,127 +365,122 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
     .addConditionalEdges('schedule_resolve', routeAfterResolve, {
       schedule_ask_slot: 'schedule_ask_slot',
       schedule_validate: 'schedule_validate',
-      schedule_finalize: 'schedule_finalize',
+      schedule_finalize: 'subgraph_finalize',
     })
     .addConditionalEdges('schedule_ask_slot', routeAfterAskSlot, {
       schedule_resolve: 'schedule_resolve',
-      schedule_finalize: 'schedule_finalize',
+      schedule_finalize: 'subgraph_finalize',
     })
     .addConditionalEdges('schedule_validate', routeAfterValidate, {
       schedule_build_confirm: 'schedule_build_confirm',
       schedule_present: 'schedule_present',
-      schedule_finalize: 'schedule_finalize',
+      schedule_finalize: 'subgraph_finalize',
     })
     .addConditionalEdges('schedule_present', routeAfterPresent, {
       schedule_build_confirm: 'schedule_build_confirm',
       schedule_resolve: 'schedule_resolve',
       schedule_present: 'schedule_present',
-      schedule_finalize: 'schedule_finalize',
+      schedule_finalize: 'subgraph_finalize',
     })
     .addEdge('schedule_build_confirm', 'schedule_gate')
     .addConditionalEdges('schedule_gate', routeAfterGate, {
       schedule_commit: 'schedule_commit',
       schedule_resolve: 'schedule_resolve',
-      schedule_finalize: 'schedule_finalize',
+      schedule_finalize: 'subgraph_finalize',
     })
     .addConditionalEdges('schedule_commit', routeAfterCommit, {
       schedule_success: 'schedule_success',
       schedule_validate: 'schedule_validate',
-      schedule_finalize: 'schedule_finalize',
+      schedule_finalize: 'subgraph_finalize',
     })
-    .addEdge('schedule_success', 'schedule_finalize')
-    .addEdge('schedule_finalize', END)
+    .addEdge('schedule_success', 'subgraph_finalize')
     // ===== Confirm wiring =====
     .addEdge('confirm_dispatch', 'confirm_bootstrap')
     .addConditionalEdges('confirm_bootstrap', routeAfterConfirmBootstrap, {
       confirm_ask_slot: 'confirm_ask_slot',
       confirm_commit: 'confirm_commit',
-      confirm_finalize: 'confirm_finalize',
+      confirm_finalize: 'subgraph_finalize',
     })
     .addConditionalEdges('confirm_ask_slot', routeAfterConfirmAskSlot, {
       confirm_ask_slot: 'confirm_ask_slot',
       confirm_commit: 'confirm_commit',
-      confirm_finalize: 'confirm_finalize',
+      confirm_finalize: 'subgraph_finalize',
     })
     .addConditionalEdges('confirm_commit', routeAfterConfirmCommit, {
       confirm_success: 'confirm_success',
-      confirm_finalize: 'confirm_finalize',
+      confirm_finalize: 'subgraph_finalize',
     })
-    .addEdge('confirm_success', 'confirm_finalize')
-    .addEdge('confirm_finalize', END)
+    .addEdge('confirm_success', 'subgraph_finalize')
     // ===== Cancel wiring =====
     .addEdge('cancel_dispatch', 'cancel_bootstrap')
     .addConditionalEdges('cancel_bootstrap', routeAfterCancelBootstrap, {
       cancel_ask_slot: 'cancel_ask_slot',
       cancel_build_confirm: 'cancel_build_confirm',
-      cancel_finalize: 'cancel_finalize',
+      cancel_finalize: 'subgraph_finalize',
     })
     .addConditionalEdges('cancel_ask_slot', routeAfterCancelAskSlot, {
       cancel_ask_slot: 'cancel_ask_slot',
       cancel_build_confirm: 'cancel_build_confirm',
-      cancel_finalize: 'cancel_finalize',
+      cancel_finalize: 'subgraph_finalize',
     })
     .addEdge('cancel_build_confirm', 'cancel_gate')
     .addConditionalEdges('cancel_gate', routeAfterCancelGate, {
       cancel_commit: 'cancel_commit',
       cancel_ask_slot: 'cancel_ask_slot',
-      cancel_finalize: 'cancel_finalize',
+      cancel_finalize: 'subgraph_finalize',
     })
     .addConditionalEdges('cancel_commit', routeAfterCancelCommit, {
       cancel_success: 'cancel_success',
-      cancel_finalize: 'cancel_finalize',
+      cancel_finalize: 'subgraph_finalize',
     })
-    .addEdge('cancel_success', 'cancel_finalize')
-    .addEdge('cancel_finalize', END)
+    .addEdge('cancel_success', 'subgraph_finalize')
     // ===== Reschedule wiring =====
     .addEdge('reschedule_dispatch', 'reschedule_bootstrap')
     .addConditionalEdges('reschedule_bootstrap', routeAfterRescheduleBootstrap, {
       reschedule_ask_slot: 'reschedule_ask_slot',
       reschedule_validate: 'reschedule_validate',
-      reschedule_finalize: 'reschedule_finalize',
+      reschedule_finalize: 'subgraph_finalize',
     })
     .addConditionalEdges('reschedule_ask_slot', routeAfterRescheduleAskSlot, {
       reschedule_ask_slot: 'reschedule_ask_slot',
       reschedule_validate: 'reschedule_validate',
-      reschedule_finalize: 'reschedule_finalize',
+      reschedule_finalize: 'subgraph_finalize',
     })
     .addConditionalEdges('reschedule_validate', routeAfterRescheduleValidate, {
       reschedule_build_confirm: 'reschedule_build_confirm',
       reschedule_present: 'reschedule_present',
-      reschedule_finalize: 'reschedule_finalize',
+      reschedule_finalize: 'subgraph_finalize',
     })
     .addConditionalEdges('reschedule_present', routeAfterReschedulePresent, {
       reschedule_build_confirm: 'reschedule_build_confirm',
       reschedule_validate: 'reschedule_validate',
       reschedule_present: 'reschedule_present',
-      reschedule_finalize: 'reschedule_finalize',
+      reschedule_finalize: 'subgraph_finalize',
     })
     .addEdge('reschedule_build_confirm', 'reschedule_gate')
     .addConditionalEdges('reschedule_gate', routeAfterRescheduleGate, {
       reschedule_commit: 'reschedule_commit',
       reschedule_ask_slot: 'reschedule_ask_slot',
-      reschedule_finalize: 'reschedule_finalize',
+      reschedule_finalize: 'subgraph_finalize',
     })
     .addConditionalEdges('reschedule_commit', routeAfterRescheduleCommit, {
       reschedule_success: 'reschedule_success',
       reschedule_validate: 'reschedule_validate',
-      reschedule_finalize: 'reschedule_finalize',
+      reschedule_finalize: 'subgraph_finalize',
     })
-    .addEdge('reschedule_success', 'reschedule_finalize')
-    .addEdge('reschedule_finalize', END)
+    .addEdge('reschedule_success', 'subgraph_finalize')
     // ===== Query wiring (H7) =====
     .addEdge('query_dispatch', 'query_classify')
     .addConditionalEdges('query_classify', routeAfterQueryClassify, {
       query_fetch: 'query_fetch',
       query_synthesize: 'query_synthesize',
-      query_finalize: 'query_finalize',
+      query_finalize: 'subgraph_finalize',
     })
     .addConditionalEdges('query_fetch', routeAfterQueryFetch, {
       query_synthesize: 'query_synthesize',
-      query_finalize: 'query_finalize',
+      query_finalize: 'subgraph_finalize',
     })
-    .addEdge('query_synthesize', 'query_finalize')
-    .addEdge('query_finalize', END)
+    .addEdge('query_synthesize', 'subgraph_finalize')
     .compile({ checkpointer });
 
   return {
@@ -598,7 +603,8 @@ function supervisorEntryRouter(
   | 'confirm_dispatch'
   | 'cancel_dispatch'
   | 'reschedule_dispatch'
-  | 'query_dispatch' {
+  | 'query_dispatch'
+  | 'tool_send_client_summary' {
   // `supervisorEntryNode` resetea el `outcome` stale del checkpoint al abrir el
   // turno, así que un `outcome` presente acá solo puede venir del fast-path de
   // contenido no soportado de ESTE turno → cortocircuito a END.
@@ -622,6 +628,8 @@ function supervisorEntryRouter(
       if (shortcut.kind === 'confirm') return 'confirm_dispatch';
       if (shortcut.kind === 'cancel') return 'cancel_dispatch';
       if (shortcut.kind === 'reschedule') return 'reschedule_dispatch';
+      // Tool atómica single-turn: no abre subgrafo, ejecuta y responde.
+      if (shortcut.kind === 'client_summary') return 'tool_send_client_summary';
     }
     return 'subgraph_placeholder';
   }

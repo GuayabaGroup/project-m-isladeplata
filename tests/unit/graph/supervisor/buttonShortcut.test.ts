@@ -86,6 +86,17 @@ describe('detectTemplateButtonShortcut', () => {
     expect(out).toEqual({ kind: 'reschedule', value: UUID });
   });
 
+  it('mapea "Resumen del cliente" → client_summary (payload estático = título)', () => {
+    // El quick-reply de template trae el título como payload estático (sin uuid).
+    // El uuid real lo resuelve después el supervisorEntryNode vía contextMessageId.
+    const out = detectTemplateButtonShortcut({
+      type: 'button',
+      id: 'Resumen del cliente',
+      title: 'Resumen del cliente',
+    });
+    expect(out).toEqual({ kind: 'client_summary', value: 'Resumen del cliente' });
+  });
+
   it('título no reconocido → fallback al prefijo del payload', () => {
     const out = detectTemplateButtonShortcut({
       type: 'button',

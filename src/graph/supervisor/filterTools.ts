@@ -30,6 +30,7 @@ export type ToolName =
   | 'retrieve_manzanillo_url'
   | 'generate_verification_url'
   | 'connect_mercado_pago'
+  | 'send_client_summary'
   // Support tools
   | 'forward_message';
 
@@ -56,6 +57,7 @@ const STAFF_OWNER_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
   'query',
   'generate_verification_url',
   'connect_mercado_pago',
+  'send_client_summary',
   'forward_message',
 ]);
 
@@ -69,6 +71,7 @@ const STAFF_TOOLS_FALLBACK: ReadonlySet<ToolName> = new Set<ToolName>([
   'cancel',
   'confirm',
   'query',
+  'send_client_summary',
   'forward_message',
 ]);
 

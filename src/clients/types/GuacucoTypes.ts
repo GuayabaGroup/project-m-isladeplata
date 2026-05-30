@@ -359,6 +359,19 @@ export interface GetStaffAppointmentsSummaryResult {
   appointments: StaffSummaryAppointment[];
 }
 
+// send_client_summary (solo staff). Resumen del cliente dueño de una cita,
+// disparado por el botón de quick-reply "Resumen del cliente" de los templates
+// de notificación. Guacuco resuelve `appointment_uuid` a partir de un UUID o de
+// un `meta_message_id` (wamid del template tocado), valida cross-business contra
+// `context.business_uuid` y enmascara el teléfono si `context.role_id != owner`.
+// El handler devuelve `message` ya formateado (nombre, teléfono, historial).
+
+export interface SendClientSummaryResult {
+  response_type: 'text';
+  message: string;
+  appointment_uuid: string;
+}
+
 // ============================================================================
 // Query Processor — text-to-SQL endpoints (read-only). Ports IDP_OV1 contract.
 // GET /api/v1/query-processor/tables?profile_type=...&role_id=...

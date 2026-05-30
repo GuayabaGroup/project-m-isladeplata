@@ -16,6 +16,7 @@ export const GUACUCO_TOOLS = {
   CHECK_AVAILABILITY: 'check_availability',
   VALIDATE_RESCHEDULE_SLOT: 'validate_reschedule_slot',
   GET_STAFF_APPOINTMENTS_SUMMARY: 'get_staff_appointments_summary',
+  SEND_CLIENT_SUMMARY: 'send_client_summary',
   RESOLVE_CLIENT: 'resolve_client',
   RETRIEVE_MANZANILLO_URL: 'retrieve_manzanillo_url',
   GENERATE_VERIFICATION_URL: 'generate_verification_url',

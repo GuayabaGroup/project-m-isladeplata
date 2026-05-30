@@ -1,75 +1,65 @@
-# Fix: staff "resumen de mañana / X día" no invoca el tool de agenda (--i)
+# Fix: botón de template "Resumen del cliente" (staff) no funciona (--i)
 
-**Flags:** `--i` (Isladeplata). `--g` NO aplica: el contrato de Guacuco
-(`getStaffAppointmentsSummary`) **ya soporta rango** (`date_start` + `date_end`, máx 31 días).
-**Fecha:** 2026-05-30. Es el follow-up que la `todo.md` previa dejó anotado (Nota secundaria).
+**Flag:** `--i` (Isladeplata). `--g` NO aplica: el handler `send_client_summary`
+(`SendClientSummaryToolHandler`) ya existe y funciona en Guacuco.
+**Fecha:** 2026-05-30.
 
 ## Diagnóstico (root cause)
-
-El tool existe y funciona: intent `staff_schedule_day` (subgrafo `query`) →
-`guacuco.getStaffAppointmentsSummary({ date_start, date_end })`. El bug está 100% en IDP:
-
-1. **`classifyQuery.ts` (SYSTEM_PROMPT_STAFF, L69):** define `staff_schedule_day` como
-   *"agenda… de **HOY** (\"qué tengo hoy\", \"agenda\")"*. Al pedir **"resumen de mañana"** /
-   "próxima semana" / "próximos 5 días", NO matchea (dice HOY) ni `my_upcoming` (= turnos
-   propios como cliente) → cae en `cannot_answer` → *"No tengo acceso a tu calendario…"*.
-   Es exactamente la traza reportada.
-
-2. **`fetchIntent.ts` (caso `staff_schedule_day`, L162-168):** fecha hardcodeada a
-   `{ date_start: today, date_end: today }`. Aun bien clasificado, nunca respondería "mañana".
-
-El supervisor (`classifyIntent.ts`) sí rutea estos mensajes a `query` (la traza lo confirma).
-Agrego igual 1 línea defensiva al `STAFF_QUERY_HINT` para robustez ante imperativos ("dame").
+El feature `send_client_summary` estaba cableado en el IDP legacy
+(`project-m-idp/src/conversation/TemplateButtonHandler.ts` → mapeo
+`'resumen del cliente' → send_client_summary`), pero **no fue portado al rewrite
+isladeplata**. El título "Resumen del cliente" no matchea `TITLE_ACTION_MAP` en
+`buttonShortcut.ts` (solo cancelar/confirmar/reagendar), el fallback por prefijo
+del payload tampoco → `buttonShortcut=null` → el turno cae al classifier LLM, que
+lo clasifica como saludo → respuesta genérica de onboarding (la traza reportada).
 
 ## Cambios
-
-### 1. `src/graph/subgraphs/query/state.ts`
-- [ ] `QueryDraftState`: agregar `scheduleRange?: { dateStart: string; dateEnd: string }`
-      (lo resuelve classify, lo consume fetch). Reducer es spread genérico → se propaga solo.
-
-### 2. `src/graph/subgraphs/query/nodes/classifyQuery.ts`
-- [ ] `SYSTEM_PROMPT_STAFF` (const) → `buildStaffSystemPrompt(temporal)` (necesita fecha
-      actual + día de semana). Reusar `buildTemporalContext` de `../prompts/querySql.js`.
-- [ ] Ampliar `staff_schedule_day`: agenda de TRABAJO del staff para **cualquier día/rango**
-      (hoy, mañana, fecha puntual, esta semana, próximos N días, finde). Aclarar vs `my_upcoming`.
-- [ ] Cuando `intent="staff_schedule_day"`, pedir además `date_start`/`date_end` (YYYY-MM-DD)
-      relativos a hoy. Default `hoy/hoy` si no se menciona fecha.
-- [ ] `ClassifyOutput` += `dateStart?`/`dateEnd?`; `normalize` valida `^\d{4}-\d{2}-\d{2}$`,
-      solo para `staff_schedule_day`; el nodo devuelve `scheduleRange`.
-
-### 3. `src/graph/subgraphs/query/nodes/fetchIntent.ts`
-- [ ] Caso `staff_schedule_day`: reemplazar `today` hardcodeado por
-      `resolveScheduleRange(current.scheduleRange, timezone)` — valida formato, ordena
-      (`start<=end`), clampea span ≤ 31 días, fallback `hoy/hoy`. Pasar a Guacuco.
-- [ ] Incluir el rango resuelto en `rawResult`.
-
-### 4. `src/graph/supervisor/classifyIntent.ts` (defensivo, 1 línea)
-- [ ] `STAFF_QUERY_HINT`: agregar que preguntas del staff por su **propia agenda de trabajo**
-      ("qué tengo hoy", "mi agenda", "resumen del día/de mañana") son `query`, no `action`.
-
-### 5. Tests (`tests/unit/graph/subgraphs/query/nodes.test.ts`)
-- [ ] Actualizar mocks staff del clasificador con `date_start/date_end`.
-- [ ] classify: "resumen de mañana" → `staff_schedule_day` + `scheduleRange`.
-- [ ] fetch: usa `scheduleRange` (mañana) en la call, no hoy.
-- [ ] fetch: `scheduleRange` ausente → fallback hoy/hoy.
-- [ ] fetch: span > 31 días → clamp.
-
-## Verificación
-- [ ] `pnpm typecheck` + `pnpm lint` limpios.
-- [ ] `pnpm test` verde.
-- [ ] Auditoría contra `docs/REGLAS_ISLADEPLATA.md`.
+- [ ] 1. `buttonShortcut.ts`: kind `client_summary` + entrada `/resumen del cliente/i` en `TITLE_ACTION_MAP`
+- [ ] 2. `core/enums/GuacucoToolName.ts`: `SEND_CLIENT_SUMMARY: 'send_client_summary'`
+- [ ] 3. `clients/types/GuacucoTypes.ts`: `SendClientSummaryResult`
+- [ ] 4. `clients/GuacucoClient.ts`: `sendClientSummary(appointmentRef, identity)`
+- [ ] 5. `supervisor/filterTools.ts`: `send_client_summary` en `ToolName` + STAFF_OWNER_TOOLS + STAFF_TOOLS_FALLBACK (staff-only, igual que legacy)
+- [ ] 6. `tools/system/sendClientSummary.ts`: tool atómica (uuid resuelto del shortcut, fallback al wamid contextMessageId; gate `isToolAllowed`)
+- [ ] 7. `compile.ts`: nodo `tool_send_client_summary` + edge a END + ruteo del tap `client_summary` en `supervisorEntryRouter`
+- [ ] 8. `pnpm typecheck` (vigilar TS2589 por techo de nodos) + `pnpm lint`
+- [ ] 9. Tests unit (buttonShortcut + tool)
+- [ ] 10. Auditoría REGLAS_ISLADEPLATA
 
 ## Review
-- `state.ts` — `QueryDraftState.scheduleRange?: { dateStart, dateEnd }` agregado.
-- `classifyQuery.ts` — `SYSTEM_PROMPT_STAFF` → `buildStaffSystemPrompt(temporal)` (reusa
-  `buildTemporalContext`); `staff_schedule_day` ahora cubre cualquier día/rango y el LLM
-  devuelve `date_start/date_end`. `normalize` valida formato `YYYY-MM-DD` y solo conserva
-  el rango para `staff_schedule_day`. El nodo emite `scheduleRange`.
-- `fetchIntent.ts` — `resolveScheduleRange()` (valida formato, ordena, clampea ≤31 días,
-  fallback hoy/hoy) reemplaza el `today` hardcodeado; rango incluido en `rawResult`.
-- `classifyIntent.ts` — `STAFF_QUERY_HINT` + línea: agenda propia del staff = `query`.
-- `tests/.../query/nodes.test.ts` — 6 tests nuevos (classify: scheduleRange mañana / sin
-  fechas / descarta en otro intent; fetch: usa rango / fallback hoy / clamp 31d).
+- `buttonShortcut.ts` — kind `client_summary` + `/resumen del cliente/i` en `TITLE_ACTION_MAP`.
+  El payload del quick-reply es el título estático; el uuid real lo resuelve después
+  `supervisorEntryNode` vía `resolveTemplateAppointmentUuid` (mismo flujo que cancel/confirm).
+- `GuacucoToolName.ts` — `SEND_CLIENT_SUMMARY`.
+- `GuacucoTypes.ts` — `SendClientSummaryResult`.
+- `GuacucoClient.ts` — `sendClientSummary(appointmentRef, identity)`; acepta uuid **o** wamid
+  (Guacuco resuelve por `template_send_log`), igual que el legacy.
+- `filterTools.ts` — `send_client_summary` en `ToolName` + STAFF_OWNER_TOOLS + STAFF_TOOLS_FALLBACK
+  (staff-only, paridad con el legacy `toolAccess.ts`).
+- `tools/system/sendClientSummary.ts` — tool atómica single-turn (solo botón, sin path por texto).
+  Lee el uuid resuelto del shortcut, fallback al `contextMessageId`; gate `isToolAllowed`;
+  fail-safe §9.4 (sin permiso / sin ref / fallo backend → outcome neutro, nunca lanza).
+- `compile.ts`:
+  - Ruteo del tap `client_summary` desde `supervisorEntryRouter` → `tool_send_client_summary`.
+  - **TS2589 (techo de nodos)**: el nodo nuevo desbordaba la profundidad de instanciación de
+    tipos del chain `.addNode`. Solución: **colapsar los 5 nodos `*_finalize`** (todos
+    registraban la MISMA `subgraphFinalize`) en un único `subgraph_finalize`. Los routers NO
+    cambian — siguen devolviendo las keys `*_finalize`, remapeadas al nodo compartido en los
+    conditional-edge maps. Net: 48 → 45 nodos. Seguro: 1 subgrafo activo por turno → 1 arista
+    entrante; handler genérico (`__kind`).
 
-**Verificación**: `pnpm typecheck` ✓ · `pnpm lint` (255 files) ✓ · `pnpm test` 853 ✓
-(query nodes 31/31). Sin tocar Guacuco (`--g` no aplica: el contrato ya soportaba rango).
+**Verificación**: `pnpm typecheck` ✓ · `pnpm lint` (257 files) ✓ · `pnpm test` 868 ✓
+(7 nuevos de `sendClientSummary`, +1 buttonShortcut; el integration `compile.test.ts` valida el
+finalize colapsado en runtime). Sin tocar Guacuco (`--g` no aplica: el handler ya existía).
+
+## Auditoría REGLAS_ISLADEPLATA
+- §6 (HTTP clients): método nuevo vía `executeTool` + `toolContextFromIdentity` + enum
+  `GUACUCO_TOOLS`, sin axios directo. ✓
+- §10.5 (filtrado por rol): `isToolAllowed` consumido en la tool (defense-in-depth; más estricto
+  que confirm/cancel/reschedule, que no gatean en router). ✓
+- §10.6 (side-effect solo en commit): `send_client_summary` es READ-only → válido como tool
+  atómica (igual que `get_staff_appointments_summary`/`retrieve_manzanillo_url`). ✓
+- §13.4 (logging): contexto estructurado, sin PII (no se logea el message con teléfono). ✓
+- §15.2/15.3 (naming/1-componente-1-archivo): `sendClientSummary.ts` camelCase, un export +
+  helpers privados (patrón idéntico a `forwardMessage.ts`). ✓
+- §2 (dependencias): tool→filterTools dentro de `graph/`, sin ciclo. ✓
+- §4 (TS strict / `.js` / zero `any` / `import type`): ✓

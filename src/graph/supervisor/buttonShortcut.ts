@@ -15,6 +15,7 @@ export type ButtonShortcutKind =
   | 'confirm'
   | 'cancel'
   | 'reschedule'
+  | 'client_summary'
   | 'slot_pick'
   | 'service_pick'
   | 'staff_pick';
@@ -74,6 +75,7 @@ const TITLE_ACTION_MAP: ReadonlyArray<{ re: RegExp; kind: ButtonShortcutKind }> 
   { re: /cancelar/i, kind: 'cancel' },
   { re: /confirmar/i, kind: 'confirm' },
   { re: /reagendar|reprogramar/i, kind: 'reschedule' },
+  { re: /resumen del cliente/i, kind: 'client_summary' },
 ];
 
 export function detectTemplateButtonShortcut(

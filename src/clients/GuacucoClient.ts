@@ -35,6 +35,7 @@ import type {
   ResolveIdentityOutput,
   ScheduleAppointmentParams,
   ScheduleAppointmentResult,
+  SendClientSummaryResult,
   ToggleSupportModeRequest,
   ToggleSupportModeResponse,
   ToolContext,
@@ -296,6 +297,23 @@ export class GuacucoClient extends BaseHttpClient {
     return this.executeTool<GetStaffAppointmentsSummaryResult>(
       GUACUCO_TOOLS.GET_STAFF_APPOINTMENTS_SUMMARY,
       { ...params },
+      { context: toolContextFromIdentity(identity) },
+    );
+  }
+
+  /**
+   * Resumen del cliente dueño de una cita (botón "Resumen del cliente" de los
+   * templates de notificación). Read-only, solo staff.
+   *
+   * `appointmentRef` puede ser el UUID de la cita o el `meta_message_id` (wamid)
+   * del template tocado: Guacuco acepta ambos y, si no es UUID, lo resuelve vía
+   * `template_send_log`. Guacuco valida ownership cross-business con
+   * `context.business_uuid` y enmascara el teléfono según `context.role_id`.
+   */
+  sendClientSummary(appointmentRef: string, identity: Identity): Promise<SendClientSummaryResult> {
+    return this.executeTool<SendClientSummaryResult>(
+      GUACUCO_TOOLS.SEND_CLIENT_SUMMARY,
+      { appointment_uuid: appointmentRef },
       { context: toolContextFromIdentity(identity) },
     );
   }
