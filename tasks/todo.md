@@ -1,75 +1,75 @@
-# Tarea: Contexto de templates enviados en el historial del agente (IDP)
+# Fix: turno 2 re-emite la respuesta del turno 1 (outcome stale del checkpoint)
 
-**Flags:** `--i` (Isladeplata) · `--g` (Guacuco, solo consumo) · `--c` (verificación DB read-only)
-**Fecha:** 2026-05-29
+**Flags:** `--i` (Isladeplata). `--g` no aplica: la causa es 100% del grafo de IDP, no de Guacuco.
+**Fecha:** 2026-05-30
 
-## Problema
-Cuando IDP envía un template proactivo (S2S: Guacuco → IDP → WhatsApp; ej. recordatorio de turno 24h), ese mensaje **nunca entra al state del thread**. Al responder el usuario en texto libre ("sí dale", "no puedo ese día"), el `classifyIntent` del supervisor ve **solo ese texto** (sin historial, sin CRM, sin template) → rutea a ciegas (`oos`/`action:unknown`). Los taps de botón estructurados (`confirm:`/`cancel:`) ya se resuelven con `detectButtonShortcut`; el hueco son las **respuestas de texto libre** a templates.
+## Síntoma reportado (escenario incorrecto)
+Staff Juan (HappyPawsG, platformId 2, thread `...:whatsapp:2`):
+- Turno 1 — "Hola" → "¡Hola! Soy Groomy... ¿Necesitás agendar un turno, consultar...?" ✅
+- Turno 2 — "Cuantos turnos tengo esta semana?" → **el mismo saludo, byte-por-byte** ❌
 
-## Backend (`--g`) — YA EXISTE, sin cambios
-`GET /api/v1/template-send-log/recent?recipient_phone=…&window_hours=…&limit=…&status=sent` → `{ templates: RecentTemplateData[], count, window_hours }` (API-Key). Devuelve `template_name`, `parameters[]`, `created_at`, `metadata.platform_id`, `meta_message_id`, `user_type`. No requiere cambios — solo consumo + auditoría de compliance.
+El saludo idéntico (2 generaciones LLM a temp 0.7 no pueden coincidir byte-a-byte) delata que el
+turno 2 **no generó nada nuevo**: re-despachó el `outcome` del turno 1.
 
-## Decisiones (confirmadas con el owner)
-1. **State:** campo dedicado top-level `recentTemplates` en `GraphState` (replace-only, owned por pre-grafo).
-2. **Scoping cross-platform:** filtro **client-side en IDP** por `metadata.platform_id` (+ `channel_phone_number_id` si está) contra `identity.platformId`. Cero cambios en Guacuco. (Defensa cross-tenant — memoria `feedback_idp_multibusiness_identity`.)
-3. **Inyección:** `classifyIntent` + `socialResponder`.
+## Causa raíz (confirmada leyendo el código)
+`outcome` es un canal **persistido en el checkpoint** y **nunca se resetea entre turnos**.
+El pre-grafo re-pasa `input/identity/crmContext/catalog/recentTemplates` en cada invoke fresh
+(`pipeline.ts:349-358`) justo para sobreescribir valores stale — **pero NO pasa `outcome`**.
 
-## Plan de implementación (IDP)
+Turno 2 (invoke fresh, no-resume):
+1. El checkpoint todavía tiene `outcome` = saludo del turno 1.
+2. `supervisorEntryNode` (texto normal) retorna `{}` → no toca `outcome`.
+3. `supervisorEntryRouter` (`compile.ts:539-540`): `if (state.outcome) return 'unsupported_end'`
+   — asume que `outcome` solo lo setea el fast-path de contenido no soportado **de este turno**.
+   El `outcome` stale es truthy → cortocircuita a `END`.
+4. El grafo termina **sin clasificar ni escribir un outcome nuevo**.
+5. `outcomeFromResult` (`pipeline.ts:550`) devuelve `graphResult.outcome` = saludo turno 1 → re-despacho idéntico.
 
-### A. HTTP client (consumo del endpoint existente)
-- [ ] `src/clients/types/GuacucoTypes.ts`: agregar `RecentTemplateRaw` (snake_case) + `GetRecentTemplatesInput`.
-- [ ] `src/clients/mappers/RecentTemplateMapper.ts`: raw → camelCase, patrón `IdentityMapper`.
-- [ ] `src/clients/GuacucoClient.ts`: método `getRecentTemplates(input): Promise<RecentTemplate[]>` → `GET /api/v1/template-send-log/recent`, unwrap vía `BaseHttpClient`, query params snake_case. Fail-soft a `[]` lo maneja el caller (pre-grafo), no el client.
+Impacto: **cualquier** 2º mensaje de texto en un thread no expirado cuyo turno previo cerró por
+fast-path/social/subgrafo (todos dejan `outcome` seteado) re-emite la respuesta anterior.
 
-### B. State
-- [ ] `src/core/types/RecentTemplate.ts`: tipo puro `RecentTemplate` + `EMPTY_RECENT_TEMPLATES`.
-- [ ] `src/graph/state.ts`: nuevo canal `recentTemplates: Annotation<RecentTemplate[]>` con `reducer: replaceWith`, `default: () => []`. Actualizar tabla de ownership §8.2 en el JSDoc.
+## Fix (mínimo, alineado a §8.2 — el supervisor es owner de `outcome` en fast-paths/apertura de turno)
+Resetear `outcome` al abrir cada turno en el nodo de entrada del supervisor, ANTES de que el router
+lo lea. El fast-path de contenido no soportado sigue seteando su propio outcome (override del null).
 
-### C. Config / registry
-- [ ] `src/config/templateContext.config.ts`: `TEMPLATE_CONTEXT_REGISTRY` (`as const`) mapeando `template_name` → `{ description, suggestedIntentHint? }` para nombres conocidos. Fallback genérico (nombre + params crudos) para desconocidos.
-- [ ] `src/config/env.ts`: `TEMPLATE_CONTEXT_ENABLED` (default `true`), `TEMPLATE_CONTEXT_WINDOW_HOURS` (default 48), `TEMPLATE_CONTEXT_LIMIT` (default 5). **+ `tests/setup.ts` + `.env.example`** (REGLAS §14.3).
+- [ ] `src/graph/compile.ts` — `supervisorEntryNode`: en todas las ramas salvo la de contenido no
+      soportado, incluir `outcome: null` en el update (reset del valor stale del checkpoint).
+      La rama de subgrafo activo conserva `subgraphState` (no se resetea), solo limpia `outcome`.
+- [ ] `src/graph/compile.ts` — actualizar comentarios de `supervisorEntryNode`/`supervisorEntryRouter`
+      (el `outcome` que ve el router solo puede venir del fast-path de ESTE turno tras el reset).
 
-### D. Pre-grafo (fetch + scope)
-- [ ] `src/pregraph/pipeline.ts` paso **6.2**: si `TEMPLATE_CONTEXT_ENABLED` **y NO hay interrupt pendiente** (fresh invoke; en resume el subgrafo ya tiene contexto), fetch `getRecentTemplates({ recipientPhone: message.channelId, windowHours, limit, status:'sent' })` en `try/catch` (fail-open a `[]`, log `warn`). Filtrar por `platform_id === internalIdentity.platformId`. Pasar `recentTemplates` al `graph.invoke({...})`.
+## Verificación
+- [ ] Regresión en `tests/unit/graph/compile.test.ts`: dos invokes en el **mismo** `thread_id`
+      (MemorySaver) — turno 1 greeting, turno 2 pregunta distinta. Assert: outcome del turno 2 ≠ turno 1
+      y el classifier corrió en el turno 2 (no se cortocircuitó a END).
+- [ ] `pnpm test` (suite completa) + `pnpm typecheck` + `pnpm lint` verdes.
 
-### E. Inyección en prompts
-- [ ] `src/graph/nodes/renderRecentTemplates.ts`: helper puro `renderRecentTemplatesContext(templates, registry): string` (vacío → `''`). Reusable.
-- [ ] `src/graph/supervisor/classifyIntent.ts`: anexar el bloque de contexto al system prompt **por turno** (desde `state.recentTemplates`). Ajustar prompt para que "sí/no/ok/dale" en respuesta a un template de confirmación/recordatorio se clasifique como `action` + intent correcto.
-- [ ] `src/graph/supervisor/socialResponder.ts`: incluir el mismo bloque en el system prompt para responder con conciencia del último template.
-
-### F. Tests (Vitest, `tests/unit/`)
-- [ ] `GuacucoClient.getRecentTemplates` (mapeo + unwrap + error tipado).
-- [ ] `renderRecentTemplatesContext` (registry hit, fallback, vacío).
-- [ ] pipeline paso 6.2 (fetch solo en fresh invoke, filtro platform_id, fail-open a `[]` si Guacuco falla).
-- [ ] `classifyIntent` con contexto de template → "sí" rutea a `action:confirm`.
-
-### G. Verificación
-- [ ] `pnpm typecheck` + `pnpm test` + `pnpm lint`.
-- [ ] `--c`: SELECT a `template_send_log` para validar columnas reales (`metadata->>'platform_id'`, `parameters`, `channel_phone_number_id`) y que el shape del mapper coincide.
-
-## Auditoría post-implementación
-REGLAS_ISLADEPLATA (§2 deps, §6 BaseHttpClient, §8.2 ownership, §11 LLM config, §13 seguridad/logging maskPhone, §14.3 env) + REGLAS_GUACUCO (solo compliance del endpoint consumido).
+## Nota secundaria (NO se arregla acá; se reporta como follow-up)
+Aun con el outcome arreglado, "cuántos turnos tengo **esta semana**" para staff tiene cobertura
+parcial: `staff_schedule_day` solo trae HOY (`fetchIntent.ts:162`) y el hint staff del clasificador
+global (`classifyIntent.ts:82-86`) no menciona consultas de la propia agenda. Queda como follow-up
+de calidad de respuesta, separado de este bug de re-emisión.
 
 ## Review
+- `src/graph/compile.ts` — `supervisorEntryNode`: agregado `const turnReset = { outcome: null }`,
+  esparcido en las ramas de subgrafo activo / button / atomic tool / default. La rama de media
+  conserva su `return { outcome: unsupported }`. Comentarios de nodo y router actualizados.
+- `tests/unit/graph/compile.test.ts` — nuevo test de regresión "second turn on same thread does NOT
+  re-emit the previous turn outcome" (dos invokes mismo thread_id; verifica que el classifier corre
+  en el 2º turno y que el outcome cambia).
 
-**Estado**: completo. Backend ya existía (consumo del endpoint `/template-send-log/recent`); todo el trabajo fue IDP.
+**Verificación**: `pnpm typecheck` ✓ · `pnpm lint` (255 files) ✓ · `pnpm test` 838 ✓ (compile.test.ts 10/10).
 
-**Archivos nuevos**:
-- `src/core/types/RecentTemplate.ts` — tipo puro + `EMPTY_RECENT_TEMPLATES`.
-- `src/clients/mappers/RecentTemplateMapper.ts` — raw snake_case → camelCase + extracción de `platformId`.
-- `src/config/templateContext.config.ts` — registry por-prefijo (basado en nombres reales del log) + `lookupTemplateContext`.
-- `src/graph/nodes/renderRecentTemplates.ts` — helper puro de render del bloque de contexto.
+## Audit Results — REGLAS_ISLADEPLATA.md
+- **§8.2 Ownership de state** ✓ — `outcome` lo escribe el supervisor (apertura de turno + fast-paths),
+  consistente con la tabla (`subgrafo al cerrar / supervisor en fast-paths`). No se mutan bloques de
+  otro owner: el reset toca solo `outcome`; la rama de subgrafo activo NO resetea `subgraphState`.
+- **§Inmutabilidad de nodos** ✓ — el nodo retorna un `Partial<GraphStateUpdate>`; el reducer
+  `replaceWith` aplica el `null`. No hay mutación in-place del state.
+- **§2 Dirección de dependencias** ✓ — sin imports nuevos; sin `pg`/`axios`/SDK directo; cambio
+  contenido en `graph/`.
+- **Naming / dead code** ✓ — `turnReset` camelCase, usado en 4 retornos; sin imports ni vars muertas.
+- **§13 Seguridad/logging** ✓ — sin secretos, sin SQL, sin PII nueva logueada.
+- **Testing (Vitest, fuera del source)** ✓ — regresión en `tests/unit/`, imports explícitos desde vitest.
 
-**Archivos modificados**:
-- `src/clients/types/GuacucoTypes.ts` — `GetRecentTemplatesInput`, `RecentTemplateRaw`, `RecentTemplatesRawResponse`.
-- `src/clients/GuacucoClient.ts` — método `getRecentTemplates()`.
-- `src/graph/state.ts` — canal `recentTemplates` (replace-only) + fila en tabla ownership §8.2.
-- `src/config/env.ts` + `tests/setup.ts` + `.env.example` — `TEMPLATE_CONTEXT_{ENABLED,WINDOW_HOURS,LIMIT}`.
-- `src/pregraph/pipeline.ts` — paso 7.2 `fetchRecentTemplates` (solo fresh invoke, fail-open, filtro por platformId) + pasaje a `graph.invoke`.
-- `src/graph/supervisor/classifyIntent.ts` + `socialResponder.ts` — inyección del bloque al system prompt.
-
-**Tests** (+19, total 833 ✓): GuacucoClient.getRecentTemplates (4), renderRecentTemplates (7), classifyIntent (2), socialResponder (1), pipeline recent-template (5).
-
-**Verificación**: `pnpm typecheck` ✓ · `pnpm lint` ✓ · `pnpm test` 833 ✓ · DB `--c` columnas + nombres reales validados.
-
-**Nota de diseño (no-bloqueante)**: en turno de resume (Command), el checkpoint retiene los `recentTemplates` del último fresh invoke (no se re-fetchea). Es inocuo: son los mismos templates del usuario dentro de la ventana, y el próximo fresh invoke los sobreescribe (replace-only).
+Sin violaciones. No se tocó Guacuco (`--g` no aplicaba: bug 100% del grafo IDP).

@@ -7,6 +7,14 @@ import { IdpError } from '../../core/errors/IdpError.js';
 const { Pool } = pg;
 type PgPool = pg.Pool;
 
+/**
+ * Connect timeout del pool del checkpointer. Sin esto, un host Postgres
+ * inalcanzable (firewall / Trusted Sources del cluster gestionado) deja a
+ * `pool.connect()` colgado indefinidamente y el boot muere mudo: ni
+ * `Postgres checkpointer ready`, ni `Server listening`, ni `Bootstrap failed`.
+ */
+const POSTGRES_CONNECT_TIMEOUT_MS = 10_000;
+
 export interface CheckpointAge {
   exists: boolean;
   ageMs?: number;
@@ -39,16 +47,20 @@ export interface CheckpointerService {
  * que vive en Guacuco (§5 REGLAS_ISLADEPLATA).
  */
 export async function createCheckpointerService(logger: Logger): Promise<CheckpointerService> {
-  // The saver maneja su propio pool internamente (vía fromConnString).
-  // Mantenemos un pool separado para los queries de TTL/cleanup/delete —
-  // dos conexiones pool al mismo Postgres es un costo aceptable y evita
-  // el cross-types issue entre @types/pg que vienen de distintas versiones
-  // del dependency tree.
-  const saver = PostgresSaver.fromConnString(env.POSTGRES_URL);
-  await saver.setup();
+  // Un único pool compartido por el saver (checkpointer) y los queries de
+  // TTL/cleanup/delete. `connectionTimeoutMillis` es imprescindible: sin él un
+  // TCP que no responde cuelga el connect para siempre. El saver acepta un pool
+  // externo vía constructor (lo que `fromConnString` hace internamente, pero sin
+  // dejarnos configurar el timeout). Ambos `pg` del árbol resuelven a la misma
+  // versión, así que no hay cross-types issue al pasarle nuestro Pool.
+  const pool = new Pool({
+    connectionString: env.POSTGRES_URL,
+    connectionTimeoutMillis: POSTGRES_CONNECT_TIMEOUT_MS,
+  });
 
-  const pool = new Pool({ connectionString: env.POSTGRES_URL });
-
+  // Fail-fast (§3 REGLAS): probamos la conexión ANTES de `saver.setup()` para
+  // que un problema de red/credenciales/SSL se reporte como `postgres_connect_failed`
+  // visible en logs, en lugar de colgar la migración del checkpointer en silencio.
   try {
     const client = await pool.connect();
     client.release();
@@ -62,6 +74,14 @@ export async function createCheckpointerService(logger: Logger): Promise<Checkpo
       error: err instanceof Error ? err.message : String(err),
     });
   }
+
+  // `@types/pg` del checkpointer (8.6.1) difiere del de la app (8.20.0); el
+  // runtime es el mismo `pg@8.21.0`, solo divergen las declaraciones de tipos.
+  // Cast acotado vía `unknown` (no `any`) al tipo de Pool que espera el ctor.
+  const saver = new PostgresSaver(
+    pool as unknown as ConstructorParameters<typeof PostgresSaver>[0],
+  );
+  await saver.setup();
 
   const ttlSeconds = env.CHECKPOINTER_TTL_SECONDS;
 

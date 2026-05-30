@@ -333,6 +333,51 @@ describe('compileGraph (supervisor wiring)', () => {
     expect(result.outcome?.action).toBe('response');
   });
 
+  it('second turn on same thread does NOT re-emit the previous turn outcome (stale checkpoint)', async () => {
+    // Regresión: `outcome` es un canal persistido en el checkpoint. En el invoke
+    // fresh del 2º turno conservaba el outcome del 1º; `supervisorEntryRouter` lo
+    // confundía con el fast-path de media y cortocircuitaba a END re-emitiendo el
+    // saludo byte-por-byte. El reset en `supervisorEntryNode` lo corrige.
+    const { llm, create } = makeMultiReplyLlm([
+      '{"messageType":"greeting","confidence":0.95}', // turno 1: classifier
+      '¡Hola! Soy Groomy, ¿en qué te ayudo?', // turno 1: social
+      '{"messageType":"query","confidence":0.95}', // turno 2: classifier (≠ greeting)
+      'Tenés 3 turnos esta semana.', // turno 2: query synthesize
+    ]);
+    const { guacuco } = makeGuacuco();
+    const graph = compileGraph({ checkpointer, logger: mockLogger, llm, guacuco });
+    const threadId = 'th-two-turns';
+
+    const turn1 = await graph.invoke(
+      {
+        input: { channelMessage: makeMessage('Hola'), receivedAt: new Date().toISOString() },
+        identity: IDENTITY_STAFF,
+        crmContext: EMPTY_CRM_CONTEXT,
+      },
+      { configurable: { thread_id: threadId } },
+    );
+    expect(turn1.outcome?.action).toBe('response');
+    expect(turn1.outcome?.pendingReply?.text).toContain('Hola');
+    const callsAfterTurn1 = create.mock.calls.length;
+
+    const turn2 = await graph.invoke(
+      {
+        input: {
+          channelMessage: makeMessage('Cuantos turnos tengo esta semana?'),
+          receivedAt: new Date().toISOString(),
+        },
+        identity: IDENTITY_STAFF,
+        crmContext: EMPTY_CRM_CONTEXT,
+      },
+      { configurable: { thread_id: threadId } },
+    );
+
+    // El 2º turno NO debe re-emitir el saludo del 1º.
+    expect(turn2.outcome?.pendingReply?.text).not.toBe(turn1.outcome?.pendingReply?.text);
+    // Y el classifier DEBE haber corrido en el 2º turno (no se cortocircuitó a END).
+    expect(create.mock.calls.length).toBeGreaterThan(callsAfterTurn1);
+  });
+
   it('returns ignored outcome when input is missing', async () => {
     const { llm, create } = makeLlmStub('unused');
     const { guacuco } = makeGuacuco();

@@ -492,6 +492,15 @@ function supervisorEntryNode(state: GraphState): GraphStateUpdate {
   const message = state.input?.channelMessage;
   if (!message) return {};
 
+  // Reset del outcome stale al ABRIR el turno. `outcome` es un canal persistido
+  // en el checkpoint y NO se limpia entre turnos; en un invoke fresh (no-resume)
+  // conserva el valor del turno anterior. Sin este reset, `supervisorEntryRouter`
+  // lo confunde con el fast-path de contenido no soportado de ESTE turno y
+  // cortocircuita a END re-emitiendo la respuesta previa byte-por-byte. (§8.2: el
+  // supervisor es owner de `outcome` en los fast-paths / apertura de turno.) El
+  // fast-path de media de abajo pisa este null con su propio outcome.
+  const turnReset: GraphStateUpdate = { outcome: null };
+
   // Fast-path PRIMERO: contenido no soportado (image/audio/video/document/
   // location) → respuesta canned sin LLM. Va antes del guard de subgrafo
   // activo para que media a mitad de un flujo igual reciba respuesta.
@@ -512,17 +521,17 @@ function supervisorEntryNode(state: GraphState): GraphStateUpdate {
     active === 'reschedule' ||
     active === 'query'
   ) {
-    return { routing: { activeSubgraph: active } };
+    return { ...turnReset, routing: { activeSubgraph: active } };
   }
 
   const shortcut = detectButtonShortcut(message.interactivePayload);
   if (shortcut) {
-    return { routing: { buttonShortcut: shortcut } };
+    return { ...turnReset, routing: { buttonShortcut: shortcut } };
   }
 
   const text = sanitizeUserInput(message.contentText);
   const targetTool = text.length > 0 ? detectAtomicTool(text) : null;
-  return targetTool ? { routing: { targetTool } } : {};
+  return targetTool ? { ...turnReset, routing: { targetTool } } : turnReset;
 }
 
 function supervisorEntryRouter(
@@ -536,7 +545,9 @@ function supervisorEntryRouter(
   | 'cancel_dispatch'
   | 'reschedule_dispatch'
   | 'query_dispatch' {
-  // El nodo setea `outcome` solo en el fast-path de contenido no soportado.
+  // `supervisorEntryNode` resetea el `outcome` stale del checkpoint al abrir el
+  // turno, así que un `outcome` presente acá solo puede venir del fast-path de
+  // contenido no soportado de ESTE turno → cortocircuito a END.
   if (state.outcome) return 'unsupported_end';
   const active = state.routing?.activeSubgraph as ActiveSubgraph | undefined;
   if (active === 'schedule') return 'schedule_dispatch';
