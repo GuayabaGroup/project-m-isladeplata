@@ -85,7 +85,6 @@ import { detectUnsupportedContent } from './supervisor/unsupportedContent.js';
 import type { AtomicTool, ToolDeps } from './tools/Tool.js';
 import { forwardMessage } from './tools/support/forwardMessage.js';
 import { connectMercadoPago } from './tools/system/connectMercadoPago.js';
-import { generateVerificationUrl } from './tools/system/generateVerificationUrl.js';
 import { retrieveManzanilloUrl } from './tools/system/retrieveManzanilloUrl.js';
 import { sendClientSummary } from './tools/system/sendClientSummary.js';
 
@@ -307,7 +306,6 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
     .addNode('subgraph_gate', subgraphGateNode)
     .addNode('subgraph_finalize', subgraphFinalize)
     .addNode('tool_retrieve_manzanillo_url', wrapTool(retrieveManzanilloUrl))
-    .addNode('tool_generate_verification_url', wrapTool(generateVerificationUrl))
     .addNode('tool_connect_mercado_pago', wrapTool(connectMercadoPago))
     .addNode('tool_send_client_summary', wrapTool(sendClientSummary))
     .addNode('tool_forward_message', wrapTool(forwardMessage))
@@ -358,7 +356,6 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
       subgraph_placeholder: 'subgraph_placeholder',
       subgraph_dispatch: 'subgraph_dispatch',
       tool_retrieve_manzanillo_url: 'tool_retrieve_manzanillo_url',
-      tool_generate_verification_url: 'tool_generate_verification_url',
       tool_connect_mercado_pago: 'tool_connect_mercado_pago',
       tool_forward_message: 'tool_forward_message',
     })
@@ -366,7 +363,6 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
     .addEdge('subgraph_placeholder', END)
     .addEdge('subgraph_finalize', END)
     .addEdge('tool_retrieve_manzanillo_url', END)
-    .addEdge('tool_generate_verification_url', END)
     .addEdge('tool_connect_mercado_pago', END)
     .addEdge('tool_send_client_summary', END)
     .addEdge('tool_forward_message', END)

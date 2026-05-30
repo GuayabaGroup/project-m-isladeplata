@@ -355,18 +355,6 @@ export class GuacucoClient extends BaseHttpClient {
   }
 
   /**
-   * Link de verificación / acceso al panel. Guacuco lee `parameters.profile_uuid`
-   * (el staff sujeto) y guarda contra `context.business_uuid`.
-   */
-  generateVerificationUrl(identity: Identity): Promise<ToolUrlResult> {
-    return this.executeTool<ToolUrlResult>(
-      GUACUCO_TOOLS.GENERATE_VERIFICATION_URL,
-      { profile_uuid: identity.profileUuid },
-      { context: toolContextFromIdentity(identity) },
-    );
-  }
-
-  /**
    * Inicia el OAuth de Mercado Pago para el staff. Guacuco lee
    * `parameters.profile_uuid` y guarda contra `context.business_uuid`.
    */

@@ -46,6 +46,8 @@ const VALID_INTENTS: ReadonlySet<Intent> = new Set<Intent>([
   'cancel',
   'confirm',
   'forward_message',
+  'retrieve_manzanillo_url',
+  'connect_mercado_pago',
   'unknown',
 ]);
 
@@ -74,6 +76,8 @@ const PROMPT_TAIL = `Si messageType="action", incluí intent con uno de:
 - "cancel"          — quiere cancelar/anular un turno
 - "confirm"         — confirma asistencia a un turno (responde "sí", "dale", "confirmo", "ahí estaré")
 - "forward_message" — quiere AVISAR algo al negocio que NO es agendar/cancelar/confirmar/reagendar: que llegará tarde, que está en la puerta o afuera, una consulta o pedido para que lo contacten (ej. "llego 15 min tarde", "estoy afuera", "¿pueden bañarlo también?"). OJO: avisar que llega tarde NO es confirmar el turno.
+- "retrieve_manzanillo_url" — pide explícitamente el LINK/enlace/URL de reservas para agendar online por su cuenta (ej. "pasame el link de reservas", "el enlace para sacar turno", "dónde reservo online"). OJO: si solo dice que quiere un turno/agendar SIN pedir el link, eso es "schedule", no esto.
+- "connect_mercado_pago" — el negocio (staff/owner) quiere conectar/vincular MercadoPago o activar cobros/pagos online (ej. "conectar mercadopago", "vincular mi cuenta de cobros", "activar pagos").
 - "unknown"         — no encaja en ninguno de los anteriores
 
 confidence: número entre 0 y 1.

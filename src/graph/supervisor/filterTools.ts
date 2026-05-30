@@ -28,7 +28,6 @@ export type ToolName =
   | 'query'
   // Atomic system tools
   | 'retrieve_manzanillo_url'
-  | 'generate_verification_url'
   | 'connect_mercado_pago'
   | 'send_client_summary'
   // Support tools
@@ -44,7 +43,6 @@ const CLIENT_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
   'confirm',
   'query',
   'retrieve_manzanillo_url',
-  'generate_verification_url',
   'forward_message',
 ]);
 
@@ -55,15 +53,14 @@ const STAFF_OWNER_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
   'cancel',
   'confirm',
   'query',
-  'generate_verification_url',
   'connect_mercado_pago',
   'send_client_summary',
   'forward_message',
 ]);
 
 /**
- * Staff no-owner: se quitan las tools owner-only (`connect_mercado_pago` —
- * OAuth financiero; `generate_verification_url` — acceso al panel).
+ * Staff no-owner: se quita la tool owner-only `connect_mercado_pago` (OAuth
+ * financiero).
  */
 const STAFF_TOOLS_FALLBACK: ReadonlySet<ToolName> = new Set<ToolName>([
   'schedule',

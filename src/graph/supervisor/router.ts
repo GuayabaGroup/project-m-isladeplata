@@ -1,5 +1,17 @@
-import type { GraphState } from '../state.js';
+import type { GraphState, Intent } from '../state.js';
 import { type ToolName, getAvailableTools } from './filterTools.js';
+
+/**
+ * Intents que el classifier emite y que mapean a una tool ATÓMICA (no a un
+ * subgrafo). El router las rutea a `tool_<name>` directamente, gateadas por rol.
+ * El resto de los intents de acción (schedule/confirm/cancel/reschedule) van al
+ * placeholder de subgrafo. Todos estos valores son también `ToolName`.
+ */
+const ATOMIC_TOOL_INTENTS: ReadonlySet<Intent> = new Set<Intent>([
+  'forward_message',
+  'retrieve_manzanillo_url',
+  'connect_mercado_pago',
+]);
 
 /**
  * Router del supervisor. Conditional edge function: dado el state (ya con
@@ -61,12 +73,13 @@ export function routeFromSupervisor(state: GraphState): RouterDestination {
   if (messageType === 'action') {
     const intent = routing.intent ?? 'unknown';
 
-    // 3a. `forward_message` es una tool atómica (no un subgrafo): el classifier
-    // ahora lo emite como intent para avisos al negocio ("llego tarde", "estoy
-    // afuera"). Se chequea ANTES del ramo de subgrafos porque también está en el
-    // set de tools permitidas y, sin esto, caería al placeholder de subgrafo.
-    if (intent === 'forward_message' && allowed.has('forward_message')) {
-      return 'tool_forward_message' satisfies RouterDestination;
+    // 3a. Intents que mapean a una tool ATÓMICA (forward_message,
+    // retrieve_manzanillo_url, connect_mercado_pago): el classifier los emite
+    // como intent. Se chequean ANTES del ramo de subgrafos porque también están
+    // en el set de tools permitidas y, sin esto, caerían al placeholder de
+    // subgrafo. Gateados por rol vía `allowed`.
+    if (ATOMIC_TOOL_INTENTS.has(intent) && allowed.has(intent as ToolName)) {
+      return `tool_${intent as ToolName}` satisfies RouterDestination;
     }
 
     if (intent !== 'unknown' && allowed.has(intent as ToolName)) {
@@ -103,7 +116,6 @@ export function routeFromSupervisor(state: GraphState): RouterDestination {
  */
 const TOOL_PATTERNS: ReadonlyArray<{ pattern: RegExp; tool: ToolName }> = [
   { pattern: /\b(link|reserva|reservar|booking)\b/i, tool: 'retrieve_manzanillo_url' },
-  { pattern: /\b(verif|acceso|login)/i, tool: 'generate_verification_url' },
   { pattern: /mercado.?pago|cobros|cobrar/i, tool: 'connect_mercado_pago' },
   {
     // Avisos de llegada tarde en cualquier conjugación/relleno ("llego tarde",

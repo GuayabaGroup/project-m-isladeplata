@@ -180,6 +180,44 @@ describe('routeFromSupervisor', () => {
     ).toBe('tool_forward_message');
   });
 
+  it('action+retrieve_manzanillo_url (client) → tool_retrieve_manzanillo_url', () => {
+    expect(
+      routeFromSupervisor(
+        makeState({ messageType: 'action', intent: 'retrieve_manzanillo_url', confidence: 0.8 }),
+      ),
+    ).toBe('tool_retrieve_manzanillo_url');
+  });
+
+  it('action+connect_mercado_pago (owner) → tool_connect_mercado_pago', () => {
+    expect(
+      routeFromSupervisor(
+        makeState(
+          { messageType: 'action', intent: 'connect_mercado_pago', confidence: 0.8 },
+          IDENTITY_STAFF_OWNER,
+        ),
+      ),
+    ).toBe('tool_connect_mercado_pago');
+  });
+
+  it('action+connect_mercado_pago (client, not allowed) → social fallback', () => {
+    expect(
+      routeFromSupervisor(
+        makeState({ messageType: 'action', intent: 'connect_mercado_pago', confidence: 0.8 }),
+      ),
+    ).toBe('social_responder');
+  });
+
+  it('action+retrieve_manzanillo_url (staff, not allowed) → social fallback', () => {
+    expect(
+      routeFromSupervisor(
+        makeState(
+          { messageType: 'action', intent: 'retrieve_manzanillo_url', confidence: 0.8 },
+          IDENTITY_STAFF_OWNER,
+        ),
+      ),
+    ).toBe('social_responder');
+  });
+
   it('no messageType (no classifier output) → social fallback', () => {
     expect(routeFromSupervisor(makeState({}))).toBe('social_responder');
   });
@@ -189,11 +227,6 @@ describe('detectAtomicTool', () => {
   it('matches link / reserva → retrieve_manzanillo_url', () => {
     expect(detectAtomicTool('quiero el link de reserva')).toBe('retrieve_manzanillo_url');
     expect(detectAtomicTool('Mandame el link por favor')).toBe('retrieve_manzanillo_url');
-  });
-
-  it('matches verificación → generate_verification_url', () => {
-    expect(detectAtomicTool('necesito verificar mi cuenta')).toBe('generate_verification_url');
-    expect(detectAtomicTool('cómo hago el login?')).toBe('generate_verification_url');
   });
 
   it('matches mercado pago variants → connect_mercado_pago', () => {

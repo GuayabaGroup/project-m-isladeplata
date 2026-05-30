@@ -114,6 +114,15 @@ describe('classifyIntent node', () => {
     });
   });
 
+  it('acepta intents de tool atómica retrieve_manzanillo_url y connect_mercado_pago', async () => {
+    for (const intent of ['retrieve_manzanillo_url', 'connect_mercado_pago'] as const) {
+      const llm = makeProvider(`{"messageType":"action","intent":"${intent}","confidence":0.8}`);
+      const node = makeClassifyIntentNode({ llm, logger: mockLogger });
+      const update = await node(makeState('texto'));
+      expect(update.routing).toEqual({ messageType: 'action', intent, confidence: 0.8 });
+    }
+  });
+
   it('parses JSON embedded in markdown fence', async () => {
     const llm = makeProvider('```json\n{"messageType":"farewell","confidence":0.9}\n```');
     const node = makeClassifyIntentNode({ llm, logger: mockLogger });

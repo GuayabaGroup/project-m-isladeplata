@@ -12,17 +12,15 @@ describe('getAvailableTools', () => {
     expect(tools.has('connect_mercado_pago')).toBe(false);
   });
 
-  it('owner staff (role_id=1) gets connect_mercado_pago + generate_verification_url', () => {
+  it('owner staff (role_id=1) gets connect_mercado_pago but NOT retrieve_manzanillo_url', () => {
     const tools = getAvailableTools('staff', OWNER_ROLE_ID, ANY_PLATFORM);
     expect(tools.has('connect_mercado_pago')).toBe(true);
-    expect(tools.has('generate_verification_url')).toBe(true);
     expect(tools.has('retrieve_manzanillo_url')).toBe(false);
   });
 
   it('non-owner staff (role_id=2) does NOT get owner-only tools', () => {
     const tools = getAvailableTools('staff', EMPLOYEE_ROLE_ID, ANY_PLATFORM);
     expect(tools.has('connect_mercado_pago')).toBe(false);
-    expect(tools.has('generate_verification_url')).toBe(false);
     // ...but keeps the shared staff tools.
     expect(tools.has('schedule')).toBe(true);
     expect(tools.has('cancel')).toBe(true);
@@ -33,7 +31,6 @@ describe('getAvailableTools', () => {
   it('staff without roleId falls back to non-owner set', () => {
     const tools = getAvailableTools('staff');
     expect(tools.has('connect_mercado_pago')).toBe(false);
-    expect(tools.has('generate_verification_url')).toBe(false);
     expect(tools.has('schedule')).toBe(true);
   });
 
@@ -86,6 +83,5 @@ describe('isToolAllowed', () => {
     expect(isToolAllowed('retrieve_manzanillo_url', 'staff', OWNER_ROLE_ID)).toBe(false);
     // owner-only tool denied to non-owner staff
     expect(isToolAllowed('connect_mercado_pago', 'staff', EMPLOYEE_ROLE_ID)).toBe(false);
-    expect(isToolAllowed('generate_verification_url', 'staff', EMPLOYEE_ROLE_ID)).toBe(false);
   });
 });

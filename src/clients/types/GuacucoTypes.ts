@@ -199,8 +199,8 @@ export interface ToolExecuteResponse<R = unknown> {
 
 /**
  * Resultado común de las tools de sistema que devuelven un link
- * (retrieve_manzanillo_url, generate_verification_url, connect_mercado_pago).
- * Las atomic tools sólo consumen `url`.
+ * (retrieve_manzanillo_url, connect_mercado_pago). Las atomic tools sólo
+ * consumen `url`.
  */
 export interface ToolUrlResult {
   url: string;

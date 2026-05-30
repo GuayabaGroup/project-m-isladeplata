@@ -19,7 +19,6 @@ export const GUACUCO_TOOLS = {
   SEND_CLIENT_SUMMARY: 'send_client_summary',
   RESOLVE_CLIENT: 'resolve_client',
   RETRIEVE_MANZANILLO_URL: 'retrieve_manzanillo_url',
-  GENERATE_VERIFICATION_URL: 'generate_verification_url',
   CONNECT_MERCADO_PAGO: 'connect_mercado_pago',
   FORWARD_MESSAGE: 'forward_message',
 } as const;

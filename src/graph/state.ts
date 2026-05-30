@@ -38,6 +38,12 @@ export type Intent =
    * una consulta) — no es agendar/cancelar/confirmar/reagendar. Rutea a la tool
    * atómica `forward_message`, no a un subgrafo. */
   | 'forward_message'
+  /** El cliente pide explícitamente el LINK/enlace de reservas para auto-agendarse
+   * online. Tool atómica `retrieve_manzanillo_url` (NO el subgrafo `schedule`). */
+  | 'retrieve_manzanillo_url'
+  /** El staff/owner pide conectar/vincular MercadoPago o activar cobros online.
+   * Tool atómica `connect_mercado_pago` (owner-only, gateado por rol). */
+  | 'connect_mercado_pago'
   | 'unknown';
 
 export interface RoutingState {
