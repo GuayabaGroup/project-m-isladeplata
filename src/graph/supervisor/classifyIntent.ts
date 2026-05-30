@@ -83,6 +83,7 @@ const STAFF_QUERY_HINT = `
 El usuario es STAFF del negocio. Clasificá también como "query":
 - preguntas sobre la PLATAFORMA/producto en sí: qué es, precio, planes, qué incluye, cómo contratarla
 - preguntas de cómo CONFIGURAR o USAR la plataforma: subir servicios, cargar al equipo, conectar WhatsApp, configurar horarios/disponibilidad, compartir el link de reservas, primeros pasos
+- preguntas por su PROPIA AGENDA DE TRABAJO (los turnos que va a atender): "qué tengo hoy", "mi agenda", "dame el resumen de mañana", "qué turnos tengo el viernes", "mi agenda de la semana". Aunque usen un imperativo ("dame", "mostrame"), son consultas informativas → "query", no "action".
 Estas NO son "oos" ni "action": son informativas → "query".`;
 
 function buildSystemPrompt(humanRequestEnabled: boolean, staff: boolean): string {

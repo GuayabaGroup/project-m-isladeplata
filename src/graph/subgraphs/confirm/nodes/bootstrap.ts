@@ -34,6 +34,33 @@ export function makeConfirmBootstrapNode(deps: ConfirmBootstrapDeps) {
     const current = state.subgraphState as ConfirmDraftState | undefined;
     const upcomings = state.crmContext?.upcomingAppointments ?? [];
 
+    // Pre-selección por tap en botón de recordatorio: el dispatch ya resolvió
+    // `appointmentUuid`. Validamos contra upcomings y auto-commiteamos (confirmar
+    // es idempotente). Si el uuid quedó stale, caemos a la lógica por count.
+    const pre = current?.slots?.appointmentUuid;
+    if (pre?.status === 'resolved' && pre.value) {
+      const match = upcomings.find((u) => u.appointmentUuid === pre.value);
+      if (match) {
+        logger.debug('confirm.bootstrap: pre-selected via button (auto-commit)', {
+          uuid: pre.value,
+        });
+        return {
+          slots: {
+            appointmentUuid: {
+              value: match.appointmentUuid,
+              displayName: match.description,
+              userPhrase: pre.userPhrase ?? 'botón',
+              status: 'resolved',
+            },
+          },
+          phase: 'committing',
+        };
+      }
+      logger.debug('confirm.bootstrap: pre-selected uuid stale, fallback to count', {
+        uuid: pre.value,
+      });
+    }
+
     if (upcomings.length === 0) {
       logger.debug('confirm.bootstrap: no upcomings');
       return { phase: 'failed', terminalOutcome: NO_UPCOMINGS_OUTCOME };
@@ -61,8 +88,6 @@ export function makeConfirmBootstrapNode(deps: ConfirmBootstrapDeps) {
     logger.debug('confirm.bootstrap: multiple upcomings, will ask', {
       count: upcomings.length,
     });
-    // No-op: el state inicial ya tiene phase='collecting' y slots empty.
-    void current;
     return { phase: 'collecting' };
   };
 }

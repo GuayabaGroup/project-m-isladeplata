@@ -176,6 +176,44 @@ describe('query.classifyQuery — staff', () => {
     expect(update.phase).toBe('fetching');
   });
 
+  it('staff_schedule_day con fecha relativa: propaga scheduleRange (resumen de mañana)', async () => {
+    const { llm } = makeLlm(
+      '{"intent":"staff_schedule_day","confidence":0.9,"date_start":"2026-05-31","date_end":"2026-05-31"}',
+    );
+    const node = makeClassifyQueryNode({ llm, logger: mockLogger });
+    const update = await node({
+      identity: IDENTITY_STAFF,
+      subgraphState: initialQueryDraftState('dame el resumen de mañana'),
+    });
+    expect(update.intent).toBe('staff_schedule_day');
+    expect(update.phase).toBe('fetching');
+    expect(update.scheduleRange).toEqual({ dateStart: '2026-05-31', dateEnd: '2026-05-31' });
+  });
+
+  it('staff_schedule_day sin fechas válidas: scheduleRange queda undefined (fetch cae a hoy)', async () => {
+    const { llm } = makeLlm('{"intent":"staff_schedule_day","confidence":0.85,"date_start":"hoy"}');
+    const node = makeClassifyQueryNode({ llm, logger: mockLogger });
+    const update = await node({
+      identity: IDENTITY_STAFF,
+      subgraphState: initialQueryDraftState('mi agenda'),
+    });
+    expect(update.intent).toBe('staff_schedule_day');
+    expect(update.scheduleRange).toBeUndefined();
+  });
+
+  it('descarta date_start/date_end cuando el intent NO es staff_schedule_day', async () => {
+    const { llm } = makeLlm(
+      '{"intent":"service_prices","confidence":0.9,"date_start":"2026-05-31","date_end":"2026-05-31"}',
+    );
+    const node = makeClassifyQueryNode({ llm, logger: mockLogger });
+    const update = await node({
+      identity: IDENTITY_STAFF,
+      subgraphState: initialQueryDraftState('cuánto cuesta corte'),
+    });
+    expect(update.intent).toBe('service_prices');
+    expect(update.scheduleRange).toBeUndefined();
+  });
+
   it('permite platform_commercial cuando rol=staff (Nivel B)', async () => {
     const { llm } = makeLlm('{"intent":"platform_commercial","confidence":0.9}');
     const node = makeClassifyQueryNode({ llm, logger: mockLogger });
@@ -318,6 +356,62 @@ describe('query.fetchIntent — staff_schedule_day', () => {
     expect(params).toMatchObject({ date_start: expect.any(String) });
     expect((params as { date_start: string }).date_start).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(identity).toEqual(IDENTITY_STAFF);
+  });
+
+  it('usa el scheduleRange del clasificador (mañana), no hoy', async () => {
+    const { guacuco, call } = makeGuacuco(async () => ({
+      response_type: 'text',
+      message: 'Tenés 1 turno mañana.',
+      summary: 'Mañana: 09:00 Baño',
+      total: 1,
+      date_start: '2026-05-31',
+      date_end: '2026-05-31',
+      appointments: [],
+    }));
+    const draft = readyDraft('staff_schedule_day');
+    draft.scheduleRange = { dateStart: '2026-05-31', dateEnd: '2026-05-31' };
+    const node = makeFetchIntentNode({ guacuco, logger: mockLogger });
+    const update = await node({ identity: IDENTITY_STAFF, subgraphState: draft });
+    expect(update.phase).toBe('synthesizing');
+    const [params] = call.mock.calls[0] ?? [];
+    expect(params).toEqual({ date_start: '2026-05-31', date_end: '2026-05-31' });
+  });
+
+  it('scheduleRange ausente → fallback a hoy/hoy (date_start === date_end)', async () => {
+    const { guacuco, call } = makeGuacuco(async () => ({
+      response_type: 'text',
+      message: 'ok',
+      summary: 's',
+      total: 0,
+      date_start: 'x',
+      date_end: 'x',
+      appointments: [],
+    }));
+    const node = makeFetchIntentNode({ guacuco, logger: mockLogger });
+    await node({ identity: IDENTITY_STAFF, subgraphState: readyDraft('staff_schedule_day') });
+    const [params] = call.mock.calls[0] ?? [];
+    const p = params as { date_start: string; date_end: string };
+    expect(p.date_start).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(p.date_start).toBe(p.date_end);
+  });
+
+  it('clampea el rango a 31 días cuando el clasificador pide un span mayor', async () => {
+    const { guacuco, call } = makeGuacuco(async () => ({
+      response_type: 'text',
+      message: 'ok',
+      summary: 's',
+      total: 0,
+      date_start: 'x',
+      date_end: 'x',
+      appointments: [],
+    }));
+    const draft = readyDraft('staff_schedule_day');
+    // 90 días de span → debe recortarse a 31 (start + 30 días).
+    draft.scheduleRange = { dateStart: '2026-05-01', dateEnd: '2026-07-30' };
+    const node = makeFetchIntentNode({ guacuco, logger: mockLogger });
+    await node({ identity: IDENTITY_STAFF, subgraphState: draft });
+    const [params] = call.mock.calls[0] ?? [];
+    expect(params).toEqual({ date_start: '2026-05-01', date_end: '2026-05-31' });
   });
 
   it('client role: rejects with FORBIDDEN outcome, no Guacuco call', async () => {

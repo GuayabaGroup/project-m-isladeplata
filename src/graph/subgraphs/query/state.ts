@@ -37,6 +37,13 @@ export interface QueryDraftState {
   intent?: QueryIntent;
   /** Confidence del classifier (0-1). */
   confidence?: number;
+  /**
+   * Rango de fechas resuelto por classify_query para `staff_schedule_day`
+   * (hoy, mañana, una fecha puntual, esta semana, próximos N días…). Lo
+   * consume fetch_intent al llamar a Guacuco. Ausente → fetch cae a hoy/hoy.
+   * Fechas en YYYY-MM-DD relativas a la timezone del staff.
+   */
+  scheduleRange?: { dateStart: string; dateEnd: string };
   /** Result del lookup/Guacuco call. JSON-serializable para audit + LangSmith. */
   rawResult?: unknown;
   /** SQL generada por el LLM en freeform_sql (audit + Sentry trace). */

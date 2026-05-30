@@ -159,13 +159,13 @@ export function makeFetchIntentNode(deps: FetchIntentDeps) {
           logger.warn('query.fetch: missing identity.tenantUuid for staff_schedule_day');
           return { phase: 'failed', terminalOutcome: FETCH_ERROR_OUTCOME };
         }
-        const today = todayInTimezone(identity.timezone ?? 'UTC');
+        const range = resolveScheduleRange(current.scheduleRange, identity.timezone ?? 'UTC');
         try {
           const result = await guacuco.getStaffAppointmentsSummary(
-            { date_start: today, date_end: today },
+            { date_start: range.date_start, date_end: range.date_end },
             identity,
           );
-          return { rawResult: { summary: result, date: today }, phase: 'synthesizing' };
+          return { rawResult: { summary: result, ...range }, phase: 'synthesizing' };
         } catch (err) {
           logger.warn('query.fetch: getStaffAppointmentsSummary failed', {
             error: err instanceof Error ? err.message : String(err),
@@ -646,6 +646,48 @@ async function loadSchemaText(
     });
     return null;
   }
+}
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+/** Guacuco acota el resumen del staff a 31 días; clampeamos del lado IDP también. */
+const MAX_SCHEDULE_SPAN_DAYS = 31;
+
+/**
+ * Resuelve el rango `{date_start, date_end}` para get_staff_appointments_summary
+ * a partir del `scheduleRange` que dejó el clasificador (mañana, esta semana,
+ * etc.). Defensivo: si falta o viene mal formado, cae a hoy/hoy — nunca rompe.
+ * Garantiza `start <= end` y un span ≤ 31 días (recorta `end`).
+ */
+function resolveScheduleRange(
+  scheduleRange: { dateStart: string; dateEnd: string } | undefined,
+  timezone: string,
+): { date_start: string; date_end: string } {
+  const today = todayInTimezone(timezone);
+  if (
+    !scheduleRange ||
+    !DATE_RE.test(scheduleRange.dateStart) ||
+    !DATE_RE.test(scheduleRange.dateEnd)
+  ) {
+    return { date_start: today, date_end: today };
+  }
+
+  // Ordena lexicográficamente (YYYY-MM-DD ordena igual que cronológicamente).
+  let start = scheduleRange.dateStart;
+  let end = scheduleRange.dateEnd;
+  if (end < start) [start, end] = [end, start];
+
+  // Clamp del span a 31 días para no exceder el límite de Guacuco.
+  const spanDays = Math.round(
+    (Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) / 86_400_000,
+  );
+  if (Number.isFinite(spanDays) && spanDays > MAX_SCHEDULE_SPAN_DAYS - 1) {
+    const capped = new Date(
+      Date.parse(`${start}T00:00:00Z`) + (MAX_SCHEDULE_SPAN_DAYS - 1) * 86_400_000,
+    );
+    end = capped.toISOString().slice(0, 10);
+  }
+
+  return { date_start: start, date_end: end };
 }
 
 function todayInTimezone(timezone: string): string {

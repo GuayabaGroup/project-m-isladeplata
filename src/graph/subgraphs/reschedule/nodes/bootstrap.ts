@@ -32,7 +32,35 @@ export function makeRescheduleBootstrapNode(deps: RescheduleBootstrapDeps) {
     crmContext?: CrmContext;
     subgraphState?: unknown;
   }): Partial<RescheduleDraftState> {
+    const current = state.subgraphState as RescheduleDraftState | undefined;
     const upcomings = state.crmContext?.upcomingAppointments ?? [];
+
+    // Pre-selección por tap en botón de recordatorio: el dispatch ya resolvió
+    // `appointmentUuid`. Validamos contra upcomings; quedan pendientes newDate/
+    // newTime (los pedirá askSlot). Si el uuid quedó stale, caemos a la lógica por count.
+    const pre = current?.slots?.appointmentUuid;
+    if (pre?.status === 'resolved' && pre.value) {
+      const match = upcomings.find((u) => u.appointmentUuid === pre.value);
+      if (match) {
+        logger.debug('reschedule.bootstrap: pre-selected via button', { uuid: pre.value });
+        return {
+          slots: {
+            appointmentUuid: {
+              value: match.appointmentUuid,
+              displayName: match.description,
+              userPhrase: pre.userPhrase ?? 'botón',
+              status: 'resolved',
+            },
+            newDate: { status: 'empty' },
+            newTime: { status: 'empty' },
+          },
+          phase: 'collecting',
+        };
+      }
+      logger.debug('reschedule.bootstrap: pre-selected uuid stale, fallback to count', {
+        uuid: pre.value,
+      });
+    }
 
     if (upcomings.length === 0) {
       logger.debug('reschedule.bootstrap: no upcomings');

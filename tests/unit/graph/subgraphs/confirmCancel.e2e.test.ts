@@ -60,6 +60,26 @@ function makeMessage(
   };
 }
 
+/**
+ * Tap sobre un botón quick-reply de un template proactivo (recordatorio 24h).
+ * `title` = label visible (lo que el usuario tocó); `payload` = `<action>:<uuid>`
+ * que arma Guacuco por posición (puede venir CRUZADO con el label si el orden de
+ * la plantilla en Meta no matchea el índice). La acción se deriva del título.
+ */
+function makeTemplateButton(title: string, payload: string): ChannelMessage {
+  return {
+    channelType: 'whatsapp',
+    channelId: '5491100',
+    messageId: `wamid.${Math.random().toString(36).slice(2)}`,
+    contentType: 'template_button',
+    contentText: title,
+    receivedAt: new Date().toISOString(),
+    channelMeta: { phoneNumberId: 'pn-1', role: 'client' },
+    interactivePayload: { type: 'button', id: payload, title },
+    templateButton: { contextMessageId: 'wamid.ctx', payload },
+  };
+}
+
 function stub(text: string): Anthropic.Messages.Message {
   return {
     id: 'msg',
@@ -335,6 +355,108 @@ describe('cancel E2E #3: 0 upcomings → response amable', () => {
     expect(calls.cancel).not.toHaveBeenCalled();
     expect(result.outcome?.action).toBe('response');
     expect(result.outcome?.pendingReply?.text).toMatch(/no ten[ée]s turnos/i);
+  });
+});
+
+// ============================================================================
+// Template button (recordatorio proactivo) E2E — bug "Cancelar cita" → confirma
+// ============================================================================
+
+describe('template button E2E: "Cancelar cita" con payload confirm: → CANCEL (no confirm)', () => {
+  it('tap de recordatorio cruzado → entra al subgrafo cancel (gate), nunca confirma', async () => {
+    // El payload llegó como `confirm:apt-1` por un desalineo de orden en Meta,
+    // pero el título tocado es "Cancelar cita" → la acción debe ser cancel.
+    const llm = makeSeqLlm([
+      '¿Cancelo Corte mañana 16:00?', // buildConfirmMessage (buttonShortcut bypasea classifier)
+      'Cancelado. Si querés reprogramar, decímelo.', // success
+    ]);
+    const { guacuco, calls } = makeGuacuco({});
+    const graph = compileGraph({
+      checkpointer: new MemorySaver(),
+      logger: mockLogger,
+      llm,
+      guacuco,
+    });
+    const config = { configurable: { thread_id: 'e2e-tmpl-cancel' } };
+
+    const first = await graph.invoke(
+      freshInvoke(makeTemplateButton('Cancelar cita', 'confirm:apt-1'), CRM_ONE),
+      config,
+    );
+    // No confirma: abre el gate de cancelación sobre el turno pre-sembrado.
+    expect(calls.confirm).not.toHaveBeenCalled();
+    const interrupt = getInterrupt(first);
+    expect(interrupt?.pendingReply?.buttons).toBeDefined();
+
+    const uuid = interrupt?.pendingReply?.buttons?.[0]?.id.slice('confirm:'.length);
+    const final = await graph.invoke(
+      new Command({ resume: { text: '', buttonId: `confirm:${uuid}` } }),
+      config,
+    );
+    expect(calls.cancel).toHaveBeenCalledWith(
+      { appointment_uuid: 'apt-1' },
+      IDENTITY,
+      expect.any(Object),
+    );
+    expect(calls.confirm).not.toHaveBeenCalled();
+    expect(final.outcome?.action).toBe('response');
+  });
+
+  it('N upcomings: el tap pre-siembra el turno → gate directo, no pregunta cuál', async () => {
+    const llm = makeSeqLlm(['¿Cancelo Color viernes 10:00?', 'Cancelado.']);
+    const { guacuco, calls } = makeGuacuco({});
+    const graph = compileGraph({
+      checkpointer: new MemorySaver(),
+      logger: mockLogger,
+      llm,
+      guacuco,
+    });
+    const config = { configurable: { thread_id: 'e2e-tmpl-cancel-multi' } };
+
+    const first = await graph.invoke(
+      freshInvoke(makeTemplateButton('Cancelar cita', 'confirm:apt-2'), CRM_TWO),
+      config,
+    );
+    const interrupt = getInterrupt(first);
+    // Gate directo sobre apt-2 (botones confirm:/cancel:), no la lista de turnos.
+    expect(interrupt?.pendingReply?.buttons).toBeDefined();
+
+    const uuid = interrupt?.pendingReply?.buttons?.[0]?.id.slice('confirm:'.length);
+    const final = await graph.invoke(
+      new Command({ resume: { text: '', buttonId: `confirm:${uuid}` } }),
+      config,
+    );
+    expect(calls.cancel).toHaveBeenCalledWith(
+      { appointment_uuid: 'apt-2' },
+      IDENTITY,
+      expect.any(Object),
+    );
+    expect(final.outcome?.action).toBe('response');
+  });
+});
+
+describe('template button E2E: "Confirmar" con payload cancel: → CONFIRM (no cancel)', () => {
+  it('tap de recordatorio cruzado → auto-commit confirm, nunca cancela', async () => {
+    const llm = makeSeqLlm(['Listo, confirmé Corte mañana 16:00.']);
+    const { guacuco, calls } = makeGuacuco({});
+    const graph = compileGraph({
+      checkpointer: new MemorySaver(),
+      logger: mockLogger,
+      llm,
+      guacuco,
+    });
+
+    const result = await graph.invoke(
+      freshInvoke(makeTemplateButton('Confirmar', 'cancel:apt-1'), CRM_ONE),
+      { configurable: { thread_id: 'e2e-tmpl-confirm' } },
+    );
+    expect(calls.confirm).toHaveBeenCalledWith(
+      { appointment_uuid: 'apt-1' },
+      IDENTITY,
+      expect.any(Object),
+    );
+    expect(calls.cancel).not.toHaveBeenCalled();
+    expect(result.outcome?.action).toBe('response');
   });
 });
 

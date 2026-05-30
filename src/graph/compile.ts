@@ -26,6 +26,7 @@ import { makeCancelSuccessNode } from './subgraphs/cancel/nodes/successResponse.
 import { type CancelDraftState, initialCancelDraftState } from './subgraphs/cancel/state.js';
 // Finalize compartido (H4 schedule lo re-exporta como makeScheduleFinalizeNode)
 import { makeSubgraphFinalizeNode } from './subgraphs/common/finalize.js';
+import type { SlotState } from './subgraphs/common/state.js';
 // Confirm subgraph (H5)
 import { makeConfirmAskSlotNode } from './subgraphs/confirm/nodes/askSlot.js';
 import { makeConfirmBootstrapNode } from './subgraphs/confirm/nodes/bootstrap.js';
@@ -65,7 +66,11 @@ import {
   type AppointmentDraftState,
   initialAppointmentDraftState,
 } from './subgraphs/schedule/state.js';
-import { detectButtonShortcut } from './supervisor/buttonShortcut.js';
+import {
+  type ButtonShortcut,
+  detectButtonShortcut,
+  detectTemplateButtonShortcut,
+} from './supervisor/buttonShortcut.js';
 import { makeClassifyIntentNode } from './supervisor/classifyIntent.js';
 import { makeFrustrationJudge } from './supervisor/detectFrustration.js';
 import { detectAtomicTool, routeFromSupervisor } from './supervisor/router.js';
@@ -524,7 +529,13 @@ function supervisorEntryNode(state: GraphState): GraphStateUpdate {
     return { ...turnReset, routing: { activeSubgraph: active } };
   }
 
-  const shortcut = detectButtonShortcut(message.interactivePayload);
+  // Botones de templates de Guacuco (recordatorios): la acción se deriva del
+  // título visible, NO del prefijo del payload (que puede venir cruzado por un
+  // desalineo de orden en Meta). Botones interactivos propios del IDP: por prefijo.
+  const shortcut =
+    message.contentType === 'template_button'
+      ? detectTemplateButtonShortcut(message.interactivePayload)
+      : detectButtonShortcut(message.interactivePayload);
   if (shortcut) {
     return { ...turnReset, routing: { buttonShortcut: shortcut } };
   }
@@ -555,7 +566,23 @@ function supervisorEntryRouter(
   if (active === 'cancel') return 'cancel_dispatch';
   if (active === 'reschedule') return 'reschedule_dispatch';
   if (active === 'query') return 'query_dispatch';
-  return state.routing?.buttonShortcut ? 'subgraph_placeholder' : 'classify_intent';
+
+  // Button shortcut en FRÍO (sin subgrafo activo). Solo los taps sobre botones de
+  // TEMPLATE proactivo (recordatorio 24h) lanzan su subgrafo: confirm/cancel/
+  // reschedule despachan pre-sembrando el turno desde el payload. Un botón
+  // interactivo confirm:/cancel: sin subgrafo activo es un gate stale/huérfano (o
+  // un pick intra-flujo) → placeholder, no re-ejecuta la acción.
+  const shortcut = state.routing?.buttonShortcut;
+  if (shortcut) {
+    const isTemplateTap = state.input?.channelMessage?.contentType === 'template_button';
+    if (isTemplateTap) {
+      if (shortcut.kind === 'confirm') return 'confirm_dispatch';
+      if (shortcut.kind === 'cancel') return 'cancel_dispatch';
+      if (shortcut.kind === 'reschedule') return 'reschedule_dispatch';
+    }
+    return 'subgraph_placeholder';
+  }
+  return 'classify_intent';
 }
 
 /**
@@ -720,14 +747,36 @@ function routeAfterCommit(
 // Confirm subgraph dispatch + routers
 // ============================================================================
 
+/**
+ * Pre-siembra el slot `appointmentUuid` de un subgrafo (confirm/cancel/reschedule)
+ * cuando el turno entra por un tap sobre un botón de recordatorio (button shortcut
+ * en frío). El uuid viene del payload del botón; el `bootstrap` del subgrafo lo
+ * valida contra los upcomings y resuelve el `displayName`. Sin esto, el subgrafo
+ * volvería a preguntar "¿cuál turno?" pese a que el usuario ya lo eligió.
+ */
+function preseedAppointmentSlot(
+  slots: { appointmentUuid: SlotState<string> },
+  shortcut: ButtonShortcut | undefined,
+  kind: ButtonShortcut['kind'],
+): void {
+  if (shortcut?.kind !== kind || typeof shortcut.value !== 'string') return;
+  slots.appointmentUuid = {
+    value: shortcut.value,
+    userPhrase: 'botón recordatorio',
+    status: 'resolved',
+  };
+}
+
 function confirmDispatchNode(state: GraphState): GraphStateUpdate {
   if (!state.identity) return { outcome: { action: 'ignored' } };
   if (state.subgraphState && (state.subgraphState as ConfirmDraftState).__kind === 'confirm') {
     return { routing: { activeSubgraph: 'confirm' } };
   }
+  const subgraphState = initialConfirmDraftState();
+  preseedAppointmentSlot(subgraphState.slots, state.routing?.buttonShortcut, 'confirm');
   return {
     routing: { activeSubgraph: 'confirm' },
-    subgraphState: initialConfirmDraftState(),
+    subgraphState,
   };
 }
 
@@ -769,9 +818,11 @@ function cancelDispatchNode(state: GraphState): GraphStateUpdate {
   if (state.subgraphState && (state.subgraphState as CancelDraftState).__kind === 'cancel') {
     return { routing: { activeSubgraph: 'cancel' } };
   }
+  const subgraphState = initialCancelDraftState();
+  preseedAppointmentSlot(subgraphState.slots, state.routing?.buttonShortcut, 'cancel');
   return {
     routing: { activeSubgraph: 'cancel' },
-    subgraphState: initialCancelDraftState(),
+    subgraphState,
   };
 }
 
@@ -825,9 +876,11 @@ function rescheduleDispatchNode(state: GraphState): GraphStateUpdate {
   ) {
     return { routing: { activeSubgraph: 'reschedule' } };
   }
+  const subgraphState = initialRescheduleDraftState();
+  preseedAppointmentSlot(subgraphState.slots, state.routing?.buttonShortcut, 'reschedule');
   return {
     routing: { activeSubgraph: 'reschedule' },
-    subgraphState: initialRescheduleDraftState(),
+    subgraphState,
   };
 }
 

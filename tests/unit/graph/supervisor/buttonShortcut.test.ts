@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { detectButtonShortcut } from '../../../../src/graph/supervisor/buttonShortcut.js';
+import {
+  detectButtonShortcut,
+  detectTemplateButtonShortcut,
+} from '../../../../src/graph/supervisor/buttonShortcut.js';
 
 describe('detectButtonShortcut', () => {
   it('detects confirm:<uuid>', () => {
@@ -46,5 +49,62 @@ describe('detectButtonShortcut', () => {
 
   it('returns null for slot_pick with negative index', () => {
     expect(detectButtonShortcut({ type: 'list', id: 'slot_pick:-1' })).toBeNull();
+  });
+});
+
+describe('detectTemplateButtonShortcut', () => {
+  const UUID = '6e956f67-6c89-4159-957b-10b61a03400d';
+
+  it('deriva la acción del TÍTULO, no del prefijo del payload (cruce Meta↔Guacuco)', () => {
+    // El botón "Cancelar cita" llegó con payload `confirm:<uuid>` por un desalineo
+    // de orden en la plantilla de Meta. La acción debe ser cancel (lo que el
+    // usuario tocó), con el uuid sacado del payload.
+    const out = detectTemplateButtonShortcut({
+      type: 'button',
+      id: `confirm:${UUID}`,
+      title: 'Cancelar cita',
+    });
+    expect(out).toEqual({ kind: 'cancel', value: UUID });
+  });
+
+  it('mapea "Confirmar" → confirm', () => {
+    const out = detectTemplateButtonShortcut({
+      type: 'button',
+      id: `cancel:${UUID}`,
+      title: 'Confirmar',
+    });
+    expect(out).toEqual({ kind: 'confirm', value: UUID });
+  });
+
+  it('mapea "Reagendar" → reschedule', () => {
+    const out = detectTemplateButtonShortcut({
+      type: 'button',
+      id: `reschedule:${UUID}`,
+      title: 'Reagendar',
+    });
+    expect(out).toEqual({ kind: 'reschedule', value: UUID });
+  });
+
+  it('título no reconocido → fallback al prefijo del payload', () => {
+    const out = detectTemplateButtonShortcut({
+      type: 'button',
+      id: `confirm:${UUID}`,
+      title: 'Algo raro',
+    });
+    expect(out).toEqual({ kind: 'confirm', value: UUID });
+  });
+
+  it('payload sin ":" → usa el id completo como uuid', () => {
+    const out = detectTemplateButtonShortcut({
+      type: 'button',
+      id: UUID,
+      title: 'Cancelar cita',
+    });
+    expect(out).toEqual({ kind: 'cancel', value: UUID });
+  });
+
+  it('returns null sin payload', () => {
+    expect(detectTemplateButtonShortcut(null)).toBeNull();
+    expect(detectTemplateButtonShortcut(undefined)).toBeNull();
   });
 });

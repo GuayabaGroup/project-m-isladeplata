@@ -1,75 +1,75 @@
-# Fix: turno 2 re-emite la respuesta del turno 1 (outcome stale del checkpoint)
+# Fix: staff "resumen de mañana / X día" no invoca el tool de agenda (--i)
 
-**Flags:** `--i` (Isladeplata). `--g` no aplica: la causa es 100% del grafo de IDP, no de Guacuco.
-**Fecha:** 2026-05-30
+**Flags:** `--i` (Isladeplata). `--g` NO aplica: el contrato de Guacuco
+(`getStaffAppointmentsSummary`) **ya soporta rango** (`date_start` + `date_end`, máx 31 días).
+**Fecha:** 2026-05-30. Es el follow-up que la `todo.md` previa dejó anotado (Nota secundaria).
 
-## Síntoma reportado (escenario incorrecto)
-Staff Juan (HappyPawsG, platformId 2, thread `...:whatsapp:2`):
-- Turno 1 — "Hola" → "¡Hola! Soy Groomy... ¿Necesitás agendar un turno, consultar...?" ✅
-- Turno 2 — "Cuantos turnos tengo esta semana?" → **el mismo saludo, byte-por-byte** ❌
+## Diagnóstico (root cause)
 
-El saludo idéntico (2 generaciones LLM a temp 0.7 no pueden coincidir byte-a-byte) delata que el
-turno 2 **no generó nada nuevo**: re-despachó el `outcome` del turno 1.
+El tool existe y funciona: intent `staff_schedule_day` (subgrafo `query`) →
+`guacuco.getStaffAppointmentsSummary({ date_start, date_end })`. El bug está 100% en IDP:
 
-## Causa raíz (confirmada leyendo el código)
-`outcome` es un canal **persistido en el checkpoint** y **nunca se resetea entre turnos**.
-El pre-grafo re-pasa `input/identity/crmContext/catalog/recentTemplates` en cada invoke fresh
-(`pipeline.ts:349-358`) justo para sobreescribir valores stale — **pero NO pasa `outcome`**.
+1. **`classifyQuery.ts` (SYSTEM_PROMPT_STAFF, L69):** define `staff_schedule_day` como
+   *"agenda… de **HOY** (\"qué tengo hoy\", \"agenda\")"*. Al pedir **"resumen de mañana"** /
+   "próxima semana" / "próximos 5 días", NO matchea (dice HOY) ni `my_upcoming` (= turnos
+   propios como cliente) → cae en `cannot_answer` → *"No tengo acceso a tu calendario…"*.
+   Es exactamente la traza reportada.
 
-Turno 2 (invoke fresh, no-resume):
-1. El checkpoint todavía tiene `outcome` = saludo del turno 1.
-2. `supervisorEntryNode` (texto normal) retorna `{}` → no toca `outcome`.
-3. `supervisorEntryRouter` (`compile.ts:539-540`): `if (state.outcome) return 'unsupported_end'`
-   — asume que `outcome` solo lo setea el fast-path de contenido no soportado **de este turno**.
-   El `outcome` stale es truthy → cortocircuita a `END`.
-4. El grafo termina **sin clasificar ni escribir un outcome nuevo**.
-5. `outcomeFromResult` (`pipeline.ts:550`) devuelve `graphResult.outcome` = saludo turno 1 → re-despacho idéntico.
+2. **`fetchIntent.ts` (caso `staff_schedule_day`, L162-168):** fecha hardcodeada a
+   `{ date_start: today, date_end: today }`. Aun bien clasificado, nunca respondería "mañana".
 
-Impacto: **cualquier** 2º mensaje de texto en un thread no expirado cuyo turno previo cerró por
-fast-path/social/subgrafo (todos dejan `outcome` seteado) re-emite la respuesta anterior.
+El supervisor (`classifyIntent.ts`) sí rutea estos mensajes a `query` (la traza lo confirma).
+Agrego igual 1 línea defensiva al `STAFF_QUERY_HINT` para robustez ante imperativos ("dame").
 
-## Fix (mínimo, alineado a §8.2 — el supervisor es owner de `outcome` en fast-paths/apertura de turno)
-Resetear `outcome` al abrir cada turno en el nodo de entrada del supervisor, ANTES de que el router
-lo lea. El fast-path de contenido no soportado sigue seteando su propio outcome (override del null).
+## Cambios
 
-- [ ] `src/graph/compile.ts` — `supervisorEntryNode`: en todas las ramas salvo la de contenido no
-      soportado, incluir `outcome: null` en el update (reset del valor stale del checkpoint).
-      La rama de subgrafo activo conserva `subgraphState` (no se resetea), solo limpia `outcome`.
-- [ ] `src/graph/compile.ts` — actualizar comentarios de `supervisorEntryNode`/`supervisorEntryRouter`
-      (el `outcome` que ve el router solo puede venir del fast-path de ESTE turno tras el reset).
+### 1. `src/graph/subgraphs/query/state.ts`
+- [ ] `QueryDraftState`: agregar `scheduleRange?: { dateStart: string; dateEnd: string }`
+      (lo resuelve classify, lo consume fetch). Reducer es spread genérico → se propaga solo.
+
+### 2. `src/graph/subgraphs/query/nodes/classifyQuery.ts`
+- [ ] `SYSTEM_PROMPT_STAFF` (const) → `buildStaffSystemPrompt(temporal)` (necesita fecha
+      actual + día de semana). Reusar `buildTemporalContext` de `../prompts/querySql.js`.
+- [ ] Ampliar `staff_schedule_day`: agenda de TRABAJO del staff para **cualquier día/rango**
+      (hoy, mañana, fecha puntual, esta semana, próximos N días, finde). Aclarar vs `my_upcoming`.
+- [ ] Cuando `intent="staff_schedule_day"`, pedir además `date_start`/`date_end` (YYYY-MM-DD)
+      relativos a hoy. Default `hoy/hoy` si no se menciona fecha.
+- [ ] `ClassifyOutput` += `dateStart?`/`dateEnd?`; `normalize` valida `^\d{4}-\d{2}-\d{2}$`,
+      solo para `staff_schedule_day`; el nodo devuelve `scheduleRange`.
+
+### 3. `src/graph/subgraphs/query/nodes/fetchIntent.ts`
+- [ ] Caso `staff_schedule_day`: reemplazar `today` hardcodeado por
+      `resolveScheduleRange(current.scheduleRange, timezone)` — valida formato, ordena
+      (`start<=end`), clampea span ≤ 31 días, fallback `hoy/hoy`. Pasar a Guacuco.
+- [ ] Incluir el rango resuelto en `rawResult`.
+
+### 4. `src/graph/supervisor/classifyIntent.ts` (defensivo, 1 línea)
+- [ ] `STAFF_QUERY_HINT`: agregar que preguntas del staff por su **propia agenda de trabajo**
+      ("qué tengo hoy", "mi agenda", "resumen del día/de mañana") son `query`, no `action`.
+
+### 5. Tests (`tests/unit/graph/subgraphs/query/nodes.test.ts`)
+- [ ] Actualizar mocks staff del clasificador con `date_start/date_end`.
+- [ ] classify: "resumen de mañana" → `staff_schedule_day` + `scheduleRange`.
+- [ ] fetch: usa `scheduleRange` (mañana) en la call, no hoy.
+- [ ] fetch: `scheduleRange` ausente → fallback hoy/hoy.
+- [ ] fetch: span > 31 días → clamp.
 
 ## Verificación
-- [ ] Regresión en `tests/unit/graph/compile.test.ts`: dos invokes en el **mismo** `thread_id`
-      (MemorySaver) — turno 1 greeting, turno 2 pregunta distinta. Assert: outcome del turno 2 ≠ turno 1
-      y el classifier corrió en el turno 2 (no se cortocircuitó a END).
-- [ ] `pnpm test` (suite completa) + `pnpm typecheck` + `pnpm lint` verdes.
-
-## Nota secundaria (NO se arregla acá; se reporta como follow-up)
-Aun con el outcome arreglado, "cuántos turnos tengo **esta semana**" para staff tiene cobertura
-parcial: `staff_schedule_day` solo trae HOY (`fetchIntent.ts:162`) y el hint staff del clasificador
-global (`classifyIntent.ts:82-86`) no menciona consultas de la propia agenda. Queda como follow-up
-de calidad de respuesta, separado de este bug de re-emisión.
+- [ ] `pnpm typecheck` + `pnpm lint` limpios.
+- [ ] `pnpm test` verde.
+- [ ] Auditoría contra `docs/REGLAS_ISLADEPLATA.md`.
 
 ## Review
-- `src/graph/compile.ts` — `supervisorEntryNode`: agregado `const turnReset = { outcome: null }`,
-  esparcido en las ramas de subgrafo activo / button / atomic tool / default. La rama de media
-  conserva su `return { outcome: unsupported }`. Comentarios de nodo y router actualizados.
-- `tests/unit/graph/compile.test.ts` — nuevo test de regresión "second turn on same thread does NOT
-  re-emit the previous turn outcome" (dos invokes mismo thread_id; verifica que el classifier corre
-  en el 2º turno y que el outcome cambia).
+- `state.ts` — `QueryDraftState.scheduleRange?: { dateStart, dateEnd }` agregado.
+- `classifyQuery.ts` — `SYSTEM_PROMPT_STAFF` → `buildStaffSystemPrompt(temporal)` (reusa
+  `buildTemporalContext`); `staff_schedule_day` ahora cubre cualquier día/rango y el LLM
+  devuelve `date_start/date_end`. `normalize` valida formato `YYYY-MM-DD` y solo conserva
+  el rango para `staff_schedule_day`. El nodo emite `scheduleRange`.
+- `fetchIntent.ts` — `resolveScheduleRange()` (valida formato, ordena, clampea ≤31 días,
+  fallback hoy/hoy) reemplaza el `today` hardcodeado; rango incluido en `rawResult`.
+- `classifyIntent.ts` — `STAFF_QUERY_HINT` + línea: agenda propia del staff = `query`.
+- `tests/.../query/nodes.test.ts` — 6 tests nuevos (classify: scheduleRange mañana / sin
+  fechas / descarta en otro intent; fetch: usa rango / fallback hoy / clamp 31d).
 
-**Verificación**: `pnpm typecheck` ✓ · `pnpm lint` (255 files) ✓ · `pnpm test` 838 ✓ (compile.test.ts 10/10).
-
-## Audit Results — REGLAS_ISLADEPLATA.md
-- **§8.2 Ownership de state** ✓ — `outcome` lo escribe el supervisor (apertura de turno + fast-paths),
-  consistente con la tabla (`subgrafo al cerrar / supervisor en fast-paths`). No se mutan bloques de
-  otro owner: el reset toca solo `outcome`; la rama de subgrafo activo NO resetea `subgraphState`.
-- **§Inmutabilidad de nodos** ✓ — el nodo retorna un `Partial<GraphStateUpdate>`; el reducer
-  `replaceWith` aplica el `null`. No hay mutación in-place del state.
-- **§2 Dirección de dependencias** ✓ — sin imports nuevos; sin `pg`/`axios`/SDK directo; cambio
-  contenido en `graph/`.
-- **Naming / dead code** ✓ — `turnReset` camelCase, usado en 4 retornos; sin imports ni vars muertas.
-- **§13 Seguridad/logging** ✓ — sin secretos, sin SQL, sin PII nueva logueada.
-- **Testing (Vitest, fuera del source)** ✓ — regresión en `tests/unit/`, imports explícitos desde vitest.
-
-Sin violaciones. No se tocó Guacuco (`--g` no aplicaba: bug 100% del grafo IDP).
+**Verificación**: `pnpm typecheck` ✓ · `pnpm lint` (255 files) ✓ · `pnpm test` 853 ✓
+(query nodes 31/31). Sin tocar Guacuco (`--g` no aplica: el contrato ya soportaba rango).

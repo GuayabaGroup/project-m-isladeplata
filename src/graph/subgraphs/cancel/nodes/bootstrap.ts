@@ -28,7 +28,36 @@ export function makeCancelBootstrapNode(deps: CancelBootstrapDeps) {
     crmContext?: CrmContext;
     subgraphState?: unknown;
   }): Partial<CancelDraftState> {
+    const current = state.subgraphState as CancelDraftState | undefined;
     const upcomings = state.crmContext?.upcomingAppointments ?? [];
+
+    // Pre-selección por tap en botón de recordatorio: el dispatch ya resolvió
+    // `appointmentUuid`. Validamos contra upcomings, enriquecemos displayName y
+    // vamos directo al gate (cancelar es destructivo). Si el uuid quedó stale
+    // (no está en upcomings), caemos a la lógica por count.
+    const pre = current?.slots?.appointmentUuid;
+    if (pre?.status === 'resolved' && pre.value) {
+      const match = upcomings.find((u) => u.appointmentUuid === pre.value);
+      if (match) {
+        logger.debug('cancel.bootstrap: pre-selected via button (awaiting gate)', {
+          uuid: pre.value,
+        });
+        return {
+          slots: {
+            appointmentUuid: {
+              value: match.appointmentUuid,
+              displayName: match.description,
+              userPhrase: pre.userPhrase ?? 'botón',
+              status: 'resolved',
+            },
+          },
+          phase: 'awaiting_confirmation',
+        };
+      }
+      logger.debug('cancel.bootstrap: pre-selected uuid stale, fallback to count', {
+        uuid: pre.value,
+      });
+    }
 
     if (upcomings.length === 0) {
       logger.debug('cancel.bootstrap: no upcomings');
