@@ -114,34 +114,40 @@ export interface CompileGraphDeps {
 /**
  * Compile the Isladeplata LangGraph (H4 — schedule subgraph integrado).
  *
- * Wiring:
+ * Wiring (nodos compartidos: `subgraph_dispatch`, `subgraph_gate`,
+ * `subgraph_finalize` — un solo nodo c/u, despachan por subgrafo activo / `__kind`
+ * para no inflar el conteo de nodos del StateGraph; ver comentarios en el body):
  * ```
  *   START → supervisor_entry → [button shortcut?]
  *     ├── yes → subgraph_placeholder → END   (button stale/huérfano sin subgrafo activo)
+ *     │      o → subgraph_dispatch / tool_send_client_summary  (tap de template)
  *     └── no  → classify_intent → router →
  *                 ├── social_responder        → END
  *                 ├── tool_<name>             → END
  *                 ├── subgraph_placeholder    → END   (defensa: intent allowed sin dispatch)
- *                 └── schedule_dispatch       → ...   (intent='schedule', H4)
+ *                 └── subgraph_dispatch       → primer nodo del subgrafo destino
+ *
+ *   subgraph_dispatch → routeAfterDispatch → {schedule_entry | confirm_bootstrap |
+ *     cancel_bootstrap | reschedule_bootstrap | query_classify}
  *
  *   Sub-flujo schedule (todos los nodos viven en el parent):
  *
- *   schedule_dispatch → schedule_entry → schedule_resolve →
+ *   schedule_entry → schedule_resolve →
  *     → check_completeness →
  *         ├── missing → schedule_ask_slot → [interrupt o loop] → resolve
  *         └── complete → validate_availability →
- *               ├── exactMatch → build_confirm → gate_confirm →
+ *               ├── exactMatch → build_confirm → subgraph_gate →
  *                     ├── confirm → commit →
- *                           ├── done → success_response → finalize → END
+ *                           ├── done → success_response → subgraph_finalize → END
  *                           ├── validating_availability (race retry) → validate
- *                           └── failed → finalize → END
+ *                           └── failed → subgraph_finalize → END
  *                     ├── cancel/text → resolve (loop con slot pisado)
- *                     └── failed → finalize → END
+ *                     └── failed → subgraph_finalize → END
  *               ├── awaiting_pick → present_options →
  *                     ├── pick → build_confirm → ...
  *                     ├── text → resolve (re-parse)
- *                     └── failed → finalize → END
- *               └── failed → finalize → END
+ *                     └── failed → subgraph_finalize → END
+ *               └── failed → subgraph_finalize → END
  * ```
  */
 export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
@@ -264,20 +270,41 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
 
   const wrapTool = (t: AtomicTool) => async (state: GraphState) => t.run(state, toolDeps);
 
-  // Nodo finalize ÚNICO compartido por los 4 subgrafos write + query. Antes eran
-  // 5 nodos (`schedule_finalize`, `confirm_finalize`, …) registrando la MISMA
-  // función `subgraphFinalize`; se colapsan en `subgraph_finalize` para no crecer
-  // el número de nodos del StateGraph (el chain `.addNode` está al límite de la
-  // profundidad de instanciación de tipos de TS — TS2589 — y cada nodo nuevo lo
-  // desborda). Es seguro: por turno hay un solo subgrafo activo → una sola arista
-  // entrante dispara; el handler es genérico (lee `subgraphState.__kind`). Los
-  // routers condicionales NO cambian — siguen devolviendo las keys `*_finalize`,
-  // que los mapas de abajo apuntan al nodo compartido.
+  // Gate de confirmación UNIFICADO. schedule/cancel/reschedule comparten el
+  // patrón "construir confirmación → gatear sí/no"; antes eran 3 nodos `*_gate`
+  // distintos. Se colapsan en `subgraph_gate`, que despacha por `__kind` al gate
+  // del subgrafo activo. (confirm NO tiene gate.) Reduce el conteo de nodos del
+  // StateGraph (techo TS2589). Las 3 funciones de gate quedan intactas; solo el
+  // routing (entrada por `*_build_confirm`, salida por `routeAfterSubgraphGate`)
+  // se centraliza.
+  const scheduleGateNode = wrapSchedule(scheduleGate);
+  const cancelGateNode = wrapSchedule(cancelGate);
+  const rescheduleGateNode = wrapSchedule(rescheduleGate);
+  const subgraphGateNode = (state: GraphState): Promise<GraphStateUpdate> => {
+    const kind = (state.subgraphState as { __kind?: ActiveSubgraph } | null)?.__kind;
+    if (kind === 'cancel') return cancelGateNode(state);
+    if (kind === 'reschedule') return rescheduleGateNode(state);
+    return scheduleGateNode(state);
+  };
+
+  // Dos nodos compartidos colapsan repetición que antes inflaba el conteo de
+  // nodos del StateGraph (el chain `.addNode` roza el techo de profundidad de
+  // instanciación de tipos de TS — TS2589):
+  //   - `subgraph_finalize`: los 5 `*_finalize` registraban la MISMA
+  //     `subgraphFinalize`; un solo nodo basta (handler genérico vía `__kind`).
+  //   - `subgraph_dispatch`: los 5 `*_dispatch` eran casi idénticos (init del
+  //     draft + `activeSubgraph`); uno solo deriva el destino y despacha.
+  //   - `subgraph_gate`: ver arriba.
+  // Seguro porque por turno hay un solo subgrafo activo → una sola arista entrante
+  // dispara. Los routers condicionales por-subgrafo NO cambian — siguen devolviendo
+  // sus keys `*_finalize`/`*_commit`/…, que los mapas de abajo apuntan al nodo real.
   const builder = new StateGraph(GraphStateAnnotation)
     .addNode('supervisor_entry', supervisorEntryNode)
     .addNode('classify_intent', classifyIntent)
     .addNode('social_responder', socialResponder)
     .addNode('subgraph_placeholder', subgraphPlaceholderNode)
+    .addNode('subgraph_dispatch', subgraphDispatchNode)
+    .addNode('subgraph_gate', subgraphGateNode)
     .addNode('subgraph_finalize', subgraphFinalize)
     .addNode('tool_retrieve_manzanillo_url', wrapTool(retrieveManzanilloUrl))
     .addNode('tool_generate_verification_url', wrapTool(generateVerificationUrl))
@@ -285,42 +312,34 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
     .addNode('tool_send_client_summary', wrapTool(sendClientSummary))
     .addNode('tool_forward_message', wrapTool(forwardMessage))
     // Schedule subgraph nodes (inlined en parent)
-    .addNode('schedule_dispatch', scheduleDispatchNode)
     .addNode('schedule_entry', wrapScheduleAsync(scheduleEntry))
     .addNode('schedule_resolve', wrapScheduleAsync(scheduleResolve))
     .addNode('schedule_ask_slot', wrapSchedule(scheduleAskSlot))
     .addNode('schedule_validate', wrapScheduleAsync(scheduleValidate))
     .addNode('schedule_present', wrapSchedule(schedulePresent))
     .addNode('schedule_build_confirm', wrapScheduleAsync(scheduleBuildConfirm))
-    .addNode('schedule_gate', wrapSchedule(scheduleGate))
     .addNode('schedule_commit', wrapScheduleAsync(scheduleCommit))
     .addNode('schedule_success', wrapScheduleAsync(scheduleSuccess))
     // Confirm subgraph nodes
-    .addNode('confirm_dispatch', confirmDispatchNode)
     .addNode('confirm_bootstrap', wrapSchedule(confirmBootstrap))
     .addNode('confirm_ask_slot', wrapSchedule(confirmAskSlot))
     .addNode('confirm_commit', wrapScheduleAsync(confirmCommit))
     .addNode('confirm_success', wrapScheduleAsync(confirmSuccess))
     // Cancel subgraph nodes
-    .addNode('cancel_dispatch', cancelDispatchNode)
     .addNode('cancel_bootstrap', wrapSchedule(cancelBootstrap))
     .addNode('cancel_ask_slot', wrapSchedule(cancelAskSlot))
     .addNode('cancel_build_confirm', wrapScheduleAsync(cancelBuildConfirm))
-    .addNode('cancel_gate', wrapSchedule(cancelGate))
     .addNode('cancel_commit', wrapScheduleAsync(cancelCommit))
     .addNode('cancel_success', wrapScheduleAsync(cancelSuccess))
     // Reschedule subgraph nodes
-    .addNode('reschedule_dispatch', rescheduleDispatchNode)
     .addNode('reschedule_bootstrap', wrapSchedule(rescheduleBootstrap))
     .addNode('reschedule_ask_slot', wrapSchedule(rescheduleAskSlot))
     .addNode('reschedule_validate', wrapScheduleAsync(rescheduleValidate))
     .addNode('reschedule_present', wrapSchedule(reschedulePresent))
     .addNode('reschedule_build_confirm', wrapScheduleAsync(rescheduleBuildConfirm))
-    .addNode('reschedule_gate', wrapSchedule(rescheduleGate))
     .addNode('reschedule_commit', wrapScheduleAsync(rescheduleCommit))
     .addNode('reschedule_success', wrapScheduleAsync(rescheduleSuccess))
     // Query subgraph nodes (H7)
-    .addNode('query_dispatch', queryDispatchNode)
     .addNode('query_classify', wrapScheduleAsync(queryClassify))
     .addNode('query_fetch', wrapScheduleAsync(queryFetch))
     .addNode('query_synthesize', wrapScheduleAsync(querySynthesize));
@@ -331,21 +350,13 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
       unsupported_end: END,
       subgraph_placeholder: 'subgraph_placeholder',
       classify_intent: 'classify_intent',
-      schedule_dispatch: 'schedule_dispatch',
-      confirm_dispatch: 'confirm_dispatch',
-      cancel_dispatch: 'cancel_dispatch',
-      reschedule_dispatch: 'reschedule_dispatch',
-      query_dispatch: 'query_dispatch',
+      subgraph_dispatch: 'subgraph_dispatch',
       tool_send_client_summary: 'tool_send_client_summary',
     })
     .addConditionalEdges('classify_intent', routeFromSupervisorWithSubgraphs, {
       social_responder: 'social_responder',
       subgraph_placeholder: 'subgraph_placeholder',
-      schedule_dispatch: 'schedule_dispatch',
-      confirm_dispatch: 'confirm_dispatch',
-      cancel_dispatch: 'cancel_dispatch',
-      reschedule_dispatch: 'reschedule_dispatch',
-      query_dispatch: 'query_dispatch',
+      subgraph_dispatch: 'subgraph_dispatch',
       tool_retrieve_manzanillo_url: 'tool_retrieve_manzanillo_url',
       tool_generate_verification_url: 'tool_generate_verification_url',
       tool_connect_mercado_pago: 'tool_connect_mercado_pago',
@@ -359,8 +370,28 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
     .addEdge('tool_connect_mercado_pago', END)
     .addEdge('tool_send_client_summary', END)
     .addEdge('tool_forward_message', END)
+    // Dispatch unificado → primer nodo del subgrafo activo.
+    .addConditionalEdges('subgraph_dispatch', routeAfterDispatch, {
+      schedule_entry: 'schedule_entry',
+      confirm_bootstrap: 'confirm_bootstrap',
+      cancel_bootstrap: 'cancel_bootstrap',
+      reschedule_bootstrap: 'reschedule_bootstrap',
+      query_classify: 'query_classify',
+      subgraph_finalize: 'subgraph_finalize',
+    })
+    // Gate unificado → delega al router del gate del subgrafo activo (por __kind).
+    .addConditionalEdges('subgraph_gate', routeAfterSubgraphGate, {
+      schedule_commit: 'schedule_commit',
+      schedule_resolve: 'schedule_resolve',
+      schedule_finalize: 'subgraph_finalize',
+      cancel_commit: 'cancel_commit',
+      cancel_ask_slot: 'cancel_ask_slot',
+      cancel_finalize: 'subgraph_finalize',
+      reschedule_commit: 'reschedule_commit',
+      reschedule_ask_slot: 'reschedule_ask_slot',
+      reschedule_finalize: 'subgraph_finalize',
+    })
     // Schedule wiring
-    .addEdge('schedule_dispatch', 'schedule_entry')
     .addEdge('schedule_entry', 'schedule_resolve')
     .addConditionalEdges('schedule_resolve', routeAfterResolve, {
       schedule_ask_slot: 'schedule_ask_slot',
@@ -382,12 +413,7 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
       schedule_present: 'schedule_present',
       schedule_finalize: 'subgraph_finalize',
     })
-    .addEdge('schedule_build_confirm', 'schedule_gate')
-    .addConditionalEdges('schedule_gate', routeAfterGate, {
-      schedule_commit: 'schedule_commit',
-      schedule_resolve: 'schedule_resolve',
-      schedule_finalize: 'subgraph_finalize',
-    })
+    .addEdge('schedule_build_confirm', 'subgraph_gate')
     .addConditionalEdges('schedule_commit', routeAfterCommit, {
       schedule_success: 'schedule_success',
       schedule_validate: 'schedule_validate',
@@ -395,7 +421,6 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
     })
     .addEdge('schedule_success', 'subgraph_finalize')
     // ===== Confirm wiring =====
-    .addEdge('confirm_dispatch', 'confirm_bootstrap')
     .addConditionalEdges('confirm_bootstrap', routeAfterConfirmBootstrap, {
       confirm_ask_slot: 'confirm_ask_slot',
       confirm_commit: 'confirm_commit',
@@ -412,7 +437,6 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
     })
     .addEdge('confirm_success', 'subgraph_finalize')
     // ===== Cancel wiring =====
-    .addEdge('cancel_dispatch', 'cancel_bootstrap')
     .addConditionalEdges('cancel_bootstrap', routeAfterCancelBootstrap, {
       cancel_ask_slot: 'cancel_ask_slot',
       cancel_build_confirm: 'cancel_build_confirm',
@@ -423,19 +447,13 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
       cancel_build_confirm: 'cancel_build_confirm',
       cancel_finalize: 'subgraph_finalize',
     })
-    .addEdge('cancel_build_confirm', 'cancel_gate')
-    .addConditionalEdges('cancel_gate', routeAfterCancelGate, {
-      cancel_commit: 'cancel_commit',
-      cancel_ask_slot: 'cancel_ask_slot',
-      cancel_finalize: 'subgraph_finalize',
-    })
+    .addEdge('cancel_build_confirm', 'subgraph_gate')
     .addConditionalEdges('cancel_commit', routeAfterCancelCommit, {
       cancel_success: 'cancel_success',
       cancel_finalize: 'subgraph_finalize',
     })
     .addEdge('cancel_success', 'subgraph_finalize')
     // ===== Reschedule wiring =====
-    .addEdge('reschedule_dispatch', 'reschedule_bootstrap')
     .addConditionalEdges('reschedule_bootstrap', routeAfterRescheduleBootstrap, {
       reschedule_ask_slot: 'reschedule_ask_slot',
       reschedule_validate: 'reschedule_validate',
@@ -457,12 +475,7 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
       reschedule_present: 'reschedule_present',
       reschedule_finalize: 'subgraph_finalize',
     })
-    .addEdge('reschedule_build_confirm', 'reschedule_gate')
-    .addConditionalEdges('reschedule_gate', routeAfterRescheduleGate, {
-      reschedule_commit: 'reschedule_commit',
-      reschedule_ask_slot: 'reschedule_ask_slot',
-      reschedule_finalize: 'subgraph_finalize',
-    })
+    .addEdge('reschedule_build_confirm', 'subgraph_gate')
     .addConditionalEdges('reschedule_commit', routeAfterRescheduleCommit, {
       reschedule_success: 'reschedule_success',
       reschedule_validate: 'reschedule_validate',
@@ -470,7 +483,6 @@ export function compileGraph(deps: CompileGraphDeps): CompiledGraph {
     })
     .addEdge('reschedule_success', 'subgraph_finalize')
     // ===== Query wiring (H7) =====
-    .addEdge('query_dispatch', 'query_classify')
     .addConditionalEdges('query_classify', routeAfterQueryClassify, {
       query_fetch: 'query_fetch',
       query_synthesize: 'query_synthesize',
@@ -599,22 +611,23 @@ function supervisorEntryRouter(
   | 'unsupported_end'
   | 'subgraph_placeholder'
   | 'classify_intent'
-  | 'schedule_dispatch'
-  | 'confirm_dispatch'
-  | 'cancel_dispatch'
-  | 'reschedule_dispatch'
-  | 'query_dispatch'
+  | 'subgraph_dispatch'
   | 'tool_send_client_summary' {
   // `supervisorEntryNode` resetea el `outcome` stale del checkpoint al abrir el
   // turno, así que un `outcome` presente acá solo puede venir del fast-path de
   // contenido no soportado de ESTE turno → cortocircuito a END.
   if (state.outcome) return 'unsupported_end';
+  // Resume de subgrafo activo → el dispatch unificado deriva cuál y reanuda.
   const active = state.routing?.activeSubgraph as ActiveSubgraph | undefined;
-  if (active === 'schedule') return 'schedule_dispatch';
-  if (active === 'confirm') return 'confirm_dispatch';
-  if (active === 'cancel') return 'cancel_dispatch';
-  if (active === 'reschedule') return 'reschedule_dispatch';
-  if (active === 'query') return 'query_dispatch';
+  if (
+    active === 'schedule' ||
+    active === 'confirm' ||
+    active === 'cancel' ||
+    active === 'reschedule' ||
+    active === 'query'
+  ) {
+    return 'subgraph_dispatch';
+  }
 
   // Button shortcut en FRÍO (sin subgrafo activo). Solo los taps sobre botones de
   // TEMPLATE proactivo (recordatorio 24h) lanzan su subgrafo: confirm/cancel/
@@ -625,9 +638,13 @@ function supervisorEntryRouter(
   if (shortcut) {
     const isTemplateTap = state.input?.channelMessage?.contentType === 'template_button';
     if (isTemplateTap) {
-      if (shortcut.kind === 'confirm') return 'confirm_dispatch';
-      if (shortcut.kind === 'cancel') return 'cancel_dispatch';
-      if (shortcut.kind === 'reschedule') return 'reschedule_dispatch';
+      if (
+        shortcut.kind === 'confirm' ||
+        shortcut.kind === 'cancel' ||
+        shortcut.kind === 'reschedule'
+      ) {
+        return 'subgraph_dispatch';
+      }
       // Tool atómica single-turn: no abre subgrafo, ejecuta y responde.
       if (shortcut.kind === 'client_summary') return 'tool_send_client_summary';
     }
@@ -643,15 +660,21 @@ function supervisorEntryRouter(
 function routeFromSupervisorWithSubgraphs(state: GraphState) {
   const base = routeFromSupervisor(state);
   if (base === 'subgraph_placeholder') {
+    // El subgrafo concreto lo deriva `subgraph_dispatch` (mismo signal: intent /
+    // messageType). Acá solo decidimos "es un subgrafo" vs el resto.
     if (state.routing?.messageType === 'action') {
       const intent = state.routing.intent;
-      if (intent === 'schedule') return 'schedule_dispatch' as const;
-      if (intent === 'confirm') return 'confirm_dispatch' as const;
-      if (intent === 'cancel') return 'cancel_dispatch' as const;
-      if (intent === 'reschedule') return 'reschedule_dispatch' as const;
+      if (
+        intent === 'schedule' ||
+        intent === 'confirm' ||
+        intent === 'cancel' ||
+        intent === 'reschedule'
+      ) {
+        return 'subgraph_dispatch' as const;
+      }
     }
     if (state.routing?.messageType === 'query') {
-      return 'query_dispatch' as const;
+      return 'subgraph_dispatch' as const;
     }
   }
   return base;
@@ -679,23 +702,125 @@ function subgraphPlaceholderNode(): GraphStateUpdate {
 }
 
 // ============================================================================
-// Schedule dispatch: punto de entrada al sub-flujo. Inicializa subgraphState si
-// es fresh, marca routing.activeSubgraph='schedule'.
+// Dispatch UNIFICADO: un solo nodo inicializa el subgraphState del subgrafo
+// destino (o lo preserva en resume) y setea `routing.activeSubgraph`. Reemplaza
+// los 5 `*_dispatch` casi idénticos. El destino se deriva de los MISMOS signals
+// que ya usaban los routers de entrada; la salida (`routeAfterDispatch`) va al
+// primer nodo real del subgrafo. La pre-siembra del slot de cita
+// (`preseedAppointmentSlot`) se aplica a confirm/cancel/reschedule igual que antes.
 // ============================================================================
 
-function scheduleDispatchNode(state: GraphState): GraphStateUpdate {
-  if (!state.identity) {
-    const outcome: Outcome = { action: 'ignored' };
-    return { outcome };
+/**
+ * Deriva a qué subgrafo despachar a partir del `routing` ya resuelto por el
+ * supervisor. Orden de precedencia idéntico al de los routers de entrada:
+ * resume (`activeSubgraph`) → tap de botón de template (`buttonShortcut`
+ * confirm/cancel/reschedule) → salida del classifier (intent de acción /
+ * `messageType='query'`). `null` solo en paths no alcanzables (los routers de
+ * entrada ya gatean: solo rutean a `subgraph_dispatch` con destino válido y
+ * permitido por rol).
+ */
+function resolveDispatchTarget(state: GraphState): ActiveSubgraph | null {
+  const active = state.routing?.activeSubgraph as ActiveSubgraph | undefined;
+  if (active) return active;
+
+  const shortcut = state.routing?.buttonShortcut;
+  if (
+    shortcut?.kind === 'confirm' ||
+    shortcut?.kind === 'cancel' ||
+    shortcut?.kind === 'reschedule'
+  ) {
+    return shortcut.kind;
   }
-  // Si ya hay subgraphState (resume), no re-inicializar.
-  if (state.subgraphState && (state.subgraphState as AppointmentDraftState).slots) {
-    return { routing: { activeSubgraph: 'schedule' } };
+
+  if (state.routing?.messageType === 'action') {
+    const intent = state.routing.intent;
+    if (
+      intent === 'schedule' ||
+      intent === 'confirm' ||
+      intent === 'cancel' ||
+      intent === 'reschedule'
+    ) {
+      return intent;
+    }
   }
-  return {
-    routing: { activeSubgraph: 'schedule' },
-    subgraphState: initialAppointmentDraftState(state.identity.profileType),
-  };
+  if (state.routing?.messageType === 'query') return 'query';
+  return null;
+}
+
+function subgraphDispatchNode(state: GraphState): GraphStateUpdate {
+  if (!state.identity) return { outcome: { action: 'ignored' } };
+
+  const target = resolveDispatchTarget(state);
+  if (!target) return { outcome: { action: 'ignored' } };
+
+  // Resume: ya hay subgraphState del mismo kind → no re-inicializar.
+  const existing = state.subgraphState as { __kind?: ActiveSubgraph } | null;
+  if (existing?.__kind === target) {
+    return { routing: { activeSubgraph: target } };
+  }
+
+  // Fresh: inicializa el draft del subgrafo destino. Los write con cita
+  // (confirm/cancel/reschedule) pre-siembran el slot desde el tap de recordatorio.
+  switch (target) {
+    case 'schedule':
+      return {
+        routing: { activeSubgraph: 'schedule' },
+        subgraphState: initialAppointmentDraftState(state.identity.profileType),
+      };
+    case 'confirm': {
+      const subgraphState = initialConfirmDraftState();
+      preseedAppointmentSlot(subgraphState.slots, state.routing?.buttonShortcut, 'confirm');
+      return { routing: { activeSubgraph: 'confirm' }, subgraphState };
+    }
+    case 'cancel': {
+      const subgraphState = initialCancelDraftState();
+      preseedAppointmentSlot(subgraphState.slots, state.routing?.buttonShortcut, 'cancel');
+      return { routing: { activeSubgraph: 'cancel' }, subgraphState };
+    }
+    case 'reschedule': {
+      const subgraphState = initialRescheduleDraftState();
+      preseedAppointmentSlot(subgraphState.slots, state.routing?.buttonShortcut, 'reschedule');
+      return { routing: { activeSubgraph: 'reschedule' }, subgraphState };
+    }
+    case 'query': {
+      const userText = sanitizeUserInput(state.input?.channelMessage?.contentText ?? '');
+      return {
+        routing: { activeSubgraph: 'query' },
+        subgraphState: initialQueryDraftState(userText),
+      };
+    }
+  }
+}
+
+/**
+ * Edge de salida del dispatch unificado: al primer nodo real del subgrafo activo.
+ * `subgraph_finalize` como defensa si no quedó `activeSubgraph` (ej. dispatch
+ * abortó por falta de identity → outcome `ignored`).
+ */
+function routeAfterDispatch(
+  state: GraphState,
+):
+  | 'schedule_entry'
+  | 'confirm_bootstrap'
+  | 'cancel_bootstrap'
+  | 'reschedule_bootstrap'
+  | 'query_classify'
+  | 'subgraph_finalize' {
+  const active = state.routing?.activeSubgraph as ActiveSubgraph | undefined;
+  switch (active) {
+    case 'schedule':
+      return 'schedule_entry';
+    case 'confirm':
+      return 'confirm_bootstrap';
+    case 'cancel':
+      return 'cancel_bootstrap';
+    case 'reschedule':
+      return 'reschedule_bootstrap';
+    case 'query':
+      return 'query_classify';
+    default:
+      return 'subgraph_finalize';
+  }
 }
 
 // ============================================================================
@@ -819,19 +944,6 @@ function preseedAppointmentSlot(
   };
 }
 
-function confirmDispatchNode(state: GraphState): GraphStateUpdate {
-  if (!state.identity) return { outcome: { action: 'ignored' } };
-  if (state.subgraphState && (state.subgraphState as ConfirmDraftState).__kind === 'confirm') {
-    return { routing: { activeSubgraph: 'confirm' } };
-  }
-  const subgraphState = initialConfirmDraftState();
-  preseedAppointmentSlot(subgraphState.slots, state.routing?.buttonShortcut, 'confirm');
-  return {
-    routing: { activeSubgraph: 'confirm' },
-    subgraphState,
-  };
-}
-
 const readConfirmDraft = makeReadDraft<ConfirmDraftState>('confirm');
 
 function routeAfterConfirmBootstrap(
@@ -864,19 +976,6 @@ function routeAfterConfirmCommit(state: GraphState): 'confirm_success' | 'confir
 // ============================================================================
 // Cancel subgraph dispatch + routers
 // ============================================================================
-
-function cancelDispatchNode(state: GraphState): GraphStateUpdate {
-  if (!state.identity) return { outcome: { action: 'ignored' } };
-  if (state.subgraphState && (state.subgraphState as CancelDraftState).__kind === 'cancel') {
-    return { routing: { activeSubgraph: 'cancel' } };
-  }
-  const subgraphState = initialCancelDraftState();
-  preseedAppointmentSlot(subgraphState.slots, state.routing?.buttonShortcut, 'cancel');
-  return {
-    routing: { activeSubgraph: 'cancel' },
-    subgraphState,
-  };
-}
 
 const readCancelDraft = makeReadDraft<CancelDraftState>('cancel');
 
@@ -919,22 +1018,6 @@ function routeAfterCancelCommit(state: GraphState): 'cancel_success' | 'cancel_f
 // ============================================================================
 // Reschedule subgraph dispatch + routers (H6)
 // ============================================================================
-
-function rescheduleDispatchNode(state: GraphState): GraphStateUpdate {
-  if (!state.identity) return { outcome: { action: 'ignored' } };
-  if (
-    state.subgraphState &&
-    (state.subgraphState as RescheduleDraftState).__kind === 'reschedule'
-  ) {
-    return { routing: { activeSubgraph: 'reschedule' } };
-  }
-  const subgraphState = initialRescheduleDraftState();
-  preseedAppointmentSlot(subgraphState.slots, state.routing?.buttonShortcut, 'reschedule');
-  return {
-    routing: { activeSubgraph: 'reschedule' },
-    subgraphState,
-  };
-}
 
 const readRescheduleDraft = makeReadDraft<RescheduleDraftState>('reschedule');
 
@@ -1017,18 +1100,27 @@ function routeAfterRescheduleCommit(
 // Query subgraph dispatch + routers (H7)
 // ============================================================================
 
-function queryDispatchNode(state: GraphState): GraphStateUpdate {
-  if (!state.identity) return { outcome: { action: 'ignored' } };
-  // Si ya hay state (poco probable — query no interrumpe en happy path),
-  // preservar para no perder fetch en curso.
-  if (state.subgraphState && (state.subgraphState as QueryDraftState).__kind === 'query') {
-    return { routing: { activeSubgraph: 'query' } };
-  }
-  const userText = sanitizeUserInput(state.input?.channelMessage?.contentText ?? '');
-  return {
-    routing: { activeSubgraph: 'query' },
-    subgraphState: initialQueryDraftState(userText),
-  };
+/**
+ * Edge de salida del gate UNIFICADO: delega al router del gate del subgrafo
+ * activo (por `__kind`). Reúne las salidas posibles de los 3 gates
+ * (schedule/cancel/reschedule); cada uno conserva su propia lógica.
+ */
+function routeAfterSubgraphGate(
+  state: GraphState,
+):
+  | 'schedule_commit'
+  | 'schedule_resolve'
+  | 'schedule_finalize'
+  | 'cancel_commit'
+  | 'cancel_ask_slot'
+  | 'cancel_finalize'
+  | 'reschedule_commit'
+  | 'reschedule_ask_slot'
+  | 'reschedule_finalize' {
+  const kind = (state.subgraphState as { __kind?: ActiveSubgraph } | null)?.__kind;
+  if (kind === 'cancel') return routeAfterCancelGate(state);
+  if (kind === 'reschedule') return routeAfterRescheduleGate(state);
+  return routeAfterGate(state);
 }
 
 const readQueryDraft = makeReadDraft<QueryDraftState>('query');

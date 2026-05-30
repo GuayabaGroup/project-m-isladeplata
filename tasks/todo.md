@@ -63,3 +63,31 @@ finalize colapsado en runtime). Sin tocar Guacuco (`--g` no aplica: el handler y
   helpers privados (patrón idéntico a `forwardMessage.ts`). ✓
 - §2 (dependencias): tool→filterTools dentro de `graph/`, sin ciclo. ✓
 - §4 (TS strict / `.js` / zero `any` / `import type`): ✓
+
+---
+
+# Optimización de nodos A + B (2026-05-30, follow-up)
+
+Reducir el conteo de nodos del StateGraph (headroom TS2589) consolidando repetición.
+
+## A) Dispatch unificado (5 → 1)
+- [x] `subgraph_dispatch` + `resolveDispatchTarget(state)` (deriva destino: activeSubgraph/
+      buttonShortcut/intent/messageType) + `routeAfterDispatch` (salida por activeSubgraph).
+- [x] Eliminados `scheduleDispatchNode`/`confirmDispatchNode`/`cancelDispatchNode`/
+      `rescheduleDispatchNode`/`queryDispatchNode`.
+- [x] `supervisorEntryRouter` y `routeFromSupervisorWithSubgraphs` devuelven `'subgraph_dispatch'`
+      (gotcha: actualizar router **y** map; el typecheck no atrapa el desajuste, sí los e2e).
+
+## B) Gate unificado (3 → 1)
+- [x] `subgraph_gate` despacha por `__kind` a las 3 fns de gate intactas; salida
+      `routeAfterSubgraphGate` delega al router de gate del subgrafo activo.
+- [x] Eliminados nodos `schedule_gate`/`cancel_gate`/`reschedule_gate` + sus 3 conditional edges.
+
+## Resultado
+- Nodos: **45 → 39** (−4 dispatch, −2 gate). Routers por-subgrafo intactos.
+- Diagrama ASCII del docstring de `compileGraph` actualizado.
+- **Verificación**: `pnpm typecheck` ✓ · `pnpm lint` (257) ✓ · `pnpm test` **868 ✓**
+  (los e2e de schedule/confirm/cancel/reschedule/query validan el grafo completo en runtime).
+- Auditoría: §10.5 (gating intacto, sigue en `routeFromSupervisor` antes del dispatch), §10.6
+  (gate/dispatch no escriben), §8.2 (dispatch es owner de activeSubgraph+subgraphState, igual que
+  antes), sin dead code (gate fns reusadas), sin imports sin uso. ✓
