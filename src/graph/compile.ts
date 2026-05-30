@@ -70,6 +70,7 @@ import {
   type ButtonShortcut,
   detectButtonShortcut,
   detectTemplateButtonShortcut,
+  resolveTemplateAppointmentUuid,
 } from './supervisor/buttonShortcut.js';
 import { makeClassifyIntentNode } from './supervisor/classifyIntent.js';
 import { makeFrustrationJudge } from './supervisor/detectFrustration.js';
@@ -537,7 +538,20 @@ function supervisorEntryNode(state: GraphState): GraphStateUpdate {
       ? detectTemplateButtonShortcut(message.interactivePayload)
       : detectButtonShortcut(message.interactivePayload);
   if (shortcut) {
-    return { ...turnReset, routing: { buttonShortcut: shortcut } };
+    // El payload de un quick-reply de template es estático (el título), no trae el
+    // uuid del turno. Lo resolvemos cruzando el `contextMessageId` del tap contra
+    // los `recentTemplates` (mismo origen que el resolver de Guacuco por
+    // `meta_message_id`). Si no se resuelve, el `value` queda como está y el subgrafo
+    // cae a su lógica actual (preguntar) — nunca a un turno arbitrario.
+    let finalShortcut = shortcut;
+    if (message.contentType === 'template_button' && typeof shortcut.value === 'string') {
+      const resolved = resolveTemplateAppointmentUuid(
+        message.templateButton?.contextMessageId,
+        state.recentTemplates ?? [],
+      );
+      if (resolved) finalShortcut = { ...shortcut, value: resolved };
+    }
+    return { ...turnReset, routing: { buttonShortcut: finalShortcut } };
   }
 
   const text = sanitizeUserInput(message.contentText);
@@ -750,9 +764,10 @@ function routeAfterCommit(
 /**
  * Pre-siembra el slot `appointmentUuid` de un subgrafo (confirm/cancel/reschedule)
  * cuando el turno entra por un tap sobre un botón de recordatorio (button shortcut
- * en frío). El uuid viene del payload del botón; el `bootstrap` del subgrafo lo
- * valida contra los upcomings y resuelve el `displayName`. Sin esto, el subgrafo
- * volvería a preguntar "¿cuál turno?" pese a que el usuario ya lo eligió.
+ * en frío). El uuid lo resolvió `supervisorEntryNode` cruzando el `contextMessageId`
+ * del tap contra `template_send_log` (vía `recentTemplates`); el `bootstrap` del
+ * subgrafo lo valida contra los upcomings y resuelve el `displayName`. Sin esto, el
+ * subgrafo volvería a preguntar "¿cuál turno?" pese a que el usuario ya lo eligió.
  */
 function preseedAppointmentSlot(
   slots: { appointmentUuid: SlotState<string> },

@@ -29,5 +29,15 @@ export interface RecentTemplate {
    * Divapp/Groomia/Allia). `null` cuando el log no lo trae.
    */
   platformId: number | null;
+  /**
+   * `appointment_uuid` del turno asociado al template, extraído de `metadata`.
+   * Es el hilo que permite resolver QUÉ turno afectar cuando el usuario toca un
+   * botón quick-reply del template (Cancelar/Confirmar/Reagendar): el payload del
+   * botón es estático (el título), así que el uuid se resuelve cruzando el
+   * `contextMessageId` del tap contra `metaMessageId` y leyendo este campo. Misma
+   * fuente que el resolver de Guacuco (`metadata->>'appointment_uuid'`). `null`
+   * cuando el log no lo trae. Ver `resolveTemplateAppointmentUuid`.
+   */
+  appointmentUuid: string | null;
   createdAt: string;
 }

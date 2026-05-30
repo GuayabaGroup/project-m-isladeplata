@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   detectButtonShortcut,
   detectTemplateButtonShortcut,
+  resolveTemplateAppointmentUuid,
 } from '../../../../src/graph/supervisor/buttonShortcut.js';
 
 describe('detectButtonShortcut', () => {
@@ -106,5 +107,35 @@ describe('detectTemplateButtonShortcut', () => {
   it('returns null sin payload', () => {
     expect(detectTemplateButtonShortcut(null)).toBeNull();
     expect(detectTemplateButtonShortcut(undefined)).toBeNull();
+  });
+});
+
+describe('resolveTemplateAppointmentUuid', () => {
+  const APT = 'f87ab8f2-06d4-43b8-a4b9-49733c9b00ea';
+  const WAMID = 'wamid.HBgNNTQ5MTEzNDQ5ODA4MRUCABEYEkJCNEVBRTc5RkE5M0JFMTk2QgA=';
+  const templates = [
+    { metaMessageId: 'wamid.OTHER', appointmentUuid: 'apt-other' },
+    { metaMessageId: WAMID, appointmentUuid: APT },
+  ];
+
+  it('resuelve el appointmentUuid cruzando contextMessageId con metaMessageId', () => {
+    expect(resolveTemplateAppointmentUuid(WAMID, templates)).toBe(APT);
+  });
+
+  it('returns null sin contextMessageId', () => {
+    expect(resolveTemplateAppointmentUuid(undefined, templates)).toBeNull();
+  });
+
+  it('returns null cuando ningún template matchea el contextMessageId', () => {
+    expect(resolveTemplateAppointmentUuid('wamid.NOPE', templates)).toBeNull();
+  });
+
+  it('returns null cuando el template matcheado no tiene appointmentUuid', () => {
+    const noUuid = [{ metaMessageId: WAMID, appointmentUuid: null }];
+    expect(resolveTemplateAppointmentUuid(WAMID, noUuid)).toBeNull();
+  });
+
+  it('returns null con lista vacía', () => {
+    expect(resolveTemplateAppointmentUuid(WAMID, [])).toBeNull();
   });
 });

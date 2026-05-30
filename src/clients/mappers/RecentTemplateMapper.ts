@@ -6,8 +6,9 @@ import type { RecentTemplateRaw } from '../types/GuacucoTypes.js';
  * al `RecentTemplate` camelCase que consume el pre-grafo/grafo.
  *
  * Extrae `platformId` de `metadata.platform_id` (number o string numérica) para
- * el filtrado cross-platform del pre-grafo. No-throwing: campos ausentes pasan
- * como `null`.
+ * el filtrado cross-platform del pre-grafo, y `appointmentUuid` de
+ * `metadata.appointment_uuid` para resolver el turno al tocar un botón de template.
+ * No-throwing: campos ausentes pasan como `null`.
  */
 export function mapRawToRecentTemplate(raw: RecentTemplateRaw): RecentTemplate {
   return {
@@ -20,6 +21,7 @@ export function mapRawToRecentTemplate(raw: RecentTemplateRaw): RecentTemplate {
     status: raw.status,
     sourceComponent: raw.source_component,
     platformId: extractPlatformId(raw.metadata),
+    appointmentUuid: extractAppointmentUuid(raw.metadata),
     createdAt: raw.created_at,
   };
 }
@@ -30,4 +32,14 @@ function extractPlatformId(metadata: Record<string, unknown> | null): number | n
   if (typeof value === 'number' && Number.isInteger(value)) return value;
   if (typeof value === 'string' && /^\d+$/.test(value)) return Number.parseInt(value, 10);
   return null;
+}
+
+/**
+ * Espeja la semántica del resolver de Guacuco (`metadata->>'appointment_uuid'`).
+ * Devuelve la string no vacía o `null`.
+ */
+function extractAppointmentUuid(metadata: Record<string, unknown> | null): string | null {
+  if (!metadata) return null;
+  const value = metadata.appointment_uuid;
+  return typeof value === 'string' && value.length > 0 ? value : null;
 }

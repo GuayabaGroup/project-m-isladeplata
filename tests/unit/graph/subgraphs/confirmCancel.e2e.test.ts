@@ -20,6 +20,7 @@ import type {
 } from '../../../../src/core/types/ChannelMessage.js';
 import type { CrmContext } from '../../../../src/core/types/CrmContext.js';
 import type { Identity } from '../../../../src/core/types/Identity.js';
+import type { RecentTemplate } from '../../../../src/core/types/RecentTemplate.js';
 import { compileGraph } from '../../../../src/graph/compile.js';
 import {
   type AnthropicMessagesLike,
@@ -420,6 +421,61 @@ describe('template button E2E: "Cancelar cita" con payload confirm: → CANCEL (
     const interrupt = getInterrupt(first);
     // Gate directo sobre apt-2 (botones confirm:/cancel:), no la lista de turnos.
     expect(interrupt?.pendingReply?.buttons).toBeDefined();
+
+    const uuid = interrupt?.pendingReply?.buttons?.[0]?.id.slice('confirm:'.length);
+    const final = await graph.invoke(
+      new Command({ resume: { text: '', buttonId: `confirm:${uuid}` } }),
+      config,
+    );
+    expect(calls.cancel).toHaveBeenCalledWith(
+      { appointment_uuid: 'apt-2' },
+      IDENTITY,
+      expect.any(Object),
+    );
+    expect(final.outcome?.action).toBe('response');
+  });
+
+  it('REAL: payload = título (sin uuid) → resuelve el turno por contextMessageId/recentTemplates', async () => {
+    // Escenario productivo: el quick-reply de template trae payload estático
+    // ("Cancelar cita", sin uuid). El turno a cancelar se resuelve cruzando
+    // `templateButton.contextMessageId` ('wamid.ctx') contra `recentTemplates`.
+    const llm = makeSeqLlm(['¿Cancelo Color viernes 10:00?', 'Cancelado.']);
+    const { guacuco, calls } = makeGuacuco({});
+    const graph = compileGraph({
+      checkpointer: new MemorySaver(),
+      logger: mockLogger,
+      llm,
+      guacuco,
+    });
+    const config = { configurable: { thread_id: 'e2e-tmpl-cancel-real' } };
+
+    const recentTemplates: RecentTemplate[] = [
+      {
+        templateName: 'p2_confirm_appointment_client',
+        userType: 'client',
+        langCode: 'es_AR',
+        parameters: [],
+        channelPhoneNumberId: 'pn-1',
+        metaMessageId: 'wamid.ctx',
+        status: 'sent',
+        sourceComponent: 'notification.appointment',
+        platformId: 1,
+        appointmentUuid: 'apt-2',
+        createdAt: '2026-05-30T05:21:33Z',
+      },
+    ];
+
+    const first = await graph.invoke(
+      {
+        ...freshInvoke(makeTemplateButton('Cancelar cita', 'Cancelar cita'), CRM_TWO),
+        recentTemplates,
+      },
+      config,
+    );
+    const interrupt = getInterrupt(first);
+    // Gate directo sobre apt-2 (resuelto por contextMessageId), no la lista de turnos.
+    expect(interrupt?.pendingReply?.buttons).toBeDefined();
+    expect(interrupt?.pendingReply?.list).toBeUndefined();
 
     const uuid = interrupt?.pendingReply?.buttons?.[0]?.id.slice('confirm:'.length);
     const final = await graph.invoke(

@@ -17,6 +17,7 @@ function makeTemplate(overrides: Partial<RecentTemplate> = {}): RecentTemplate {
     status: 'sent',
     sourceComponent: 'notification.appointment',
     platformId: 3,
+    appointmentUuid: null,
     createdAt: '2026-05-29T14:30:00Z',
     ...overrides,
   };

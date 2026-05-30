@@ -1,4 +1,5 @@
 import type { InteractivePayload } from '../../core/types/ChannelMessage.js';
+import type { RecentTemplate } from '../../core/types/RecentTemplate.js';
 
 /**
  * Decisión determinística del supervisor para button payloads. Si el usuario
@@ -56,10 +57,15 @@ export function detectButtonShortcut(payload?: InteractivePayload | null): Butto
  * Detección para botones quick-reply de TEMPLATES de Guacuco (`contentType ===
  * 'template_button'`). A diferencia de los botones interactivos propios del IDP,
  * acá la ACCIÓN se deriva del `title` visible (lo que el usuario tocó), NO del
- * prefijo del payload: el payload se arma por POSICIÓN en Meta y un desalineo de
- * orden entre la plantilla aprobada y el mapeo por índice de Guacuco cruza la
- * acción (un botón "Cancelar cita" puede traer payload `confirm:<uuid>`). El uuid
- * SÍ es confiable y sale del payload (`<action>:<uuid>`).
+ * prefijo del payload.
+ *
+ * IMPORTANTE: el payload de un quick-reply de template es ESTÁTICO (Meta devuelve
+ * el título del botón, p.ej. `"Cancelar cita"`), NO trae el uuid del turno. Por
+ * eso el `value` que sale de acá es provisorio (el propio payload) y NO es un uuid
+ * confiable: el uuid real del turno se resuelve aparte, cruzando el
+ * `templateButton.contextMessageId` del tap contra los `recentTemplates`
+ * (`resolveTemplateAppointmentUuid`). El `supervisorEntryNode` pisa el `value` con
+ * ese uuid cuando lo logra resolver.
  *
  * Si el título no matchea ninguna acción conocida, cae a `detectButtonShortcut`
  * (prefijo del payload) por robustez.
@@ -86,4 +92,29 @@ export function detectTemplateButtonShortcut(
 
   // Título no reconocido → fallback al ruteo por prefijo del payload.
   return detectButtonShortcut(payload);
+}
+
+/**
+ * Resuelve el `appointmentUuid` real del turno al que pertenece un tap de botón de
+ * template. El payload del quick-reply no trae el uuid (es el título estático), así
+ * que cruzamos el `contextMessageId` del tap (= `context.id` de Meta = wamid del
+ * template tocado) contra el `metaMessageId` de los templates recientes y leemos su
+ * `appointmentUuid`.
+ *
+ * Misma fuente de verdad que el resolver de Guacuco
+ * `findAppointmentUuidByMetaMessageId` (`metadata->>'appointment_uuid'`), pero
+ * resuelto en IDP desde data que el pre-grafo ya trajo este turno. Función pura.
+ *
+ * Devuelve `null` si no hay `contextMessageId`, no hay match, o el match no tiene
+ * `appointmentUuid` → el caller cae a su lógica actual (preguntar), nunca a un turno
+ * arbitrario.
+ */
+export function resolveTemplateAppointmentUuid(
+  contextMessageId: string | undefined,
+  recentTemplates: ReadonlyArray<Pick<RecentTemplate, 'metaMessageId' | 'appointmentUuid'>>,
+): string | null {
+  if (!contextMessageId) return null;
+  // El wamid es único por mensaje → match exacto.
+  const match = recentTemplates.find((t) => t.metaMessageId === contextMessageId);
+  return match?.appointmentUuid ?? null;
 }

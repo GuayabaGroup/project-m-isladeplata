@@ -745,6 +745,7 @@ describe('GuacucoClient.getRecentTemplates', () => {
       metaMessageId: 'wamid.ABC',
       status: 'sent',
       platformId: 3,
+      appointmentUuid: 'apt-1',
       createdAt: '2026-05-29T14:30:00Z',
     });
     expect(mockHttp.get).toHaveBeenCalledWith('/api/v1/template-send-log/recent', {
@@ -787,6 +788,9 @@ describe('GuacucoClient.getRecentTemplates', () => {
 
     expect(result[0]?.platformId).toBe(2);
     expect(result[1]?.platformId).toBeNull();
+    // metadata sin appointment_uuid → null; metadata null → null
+    expect(result[0]?.appointmentUuid).toBeNull();
+    expect(result[1]?.appointmentUuid).toBeNull();
   });
 
   it('propagates backend errors as ToolExecutionError', async () => {

@@ -242,6 +242,7 @@ describe('classifyIntent recent-template context', () => {
     status: 'sent',
     sourceComponent: 'notification.appointment',
     platformId: 1,
+    appointmentUuid: null,
     createdAt: '2026-05-29T14:30:00Z',
   };
 
