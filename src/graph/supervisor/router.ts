@@ -60,6 +60,15 @@ export function routeFromSupervisor(state: GraphState): RouterDestination {
   // (compile.ts) lo traduce al `*_dispatch` real según intent.
   if (messageType === 'action') {
     const intent = routing.intent ?? 'unknown';
+
+    // 3a. `forward_message` es una tool atómica (no un subgrafo): el classifier
+    // ahora lo emite como intent para avisos al negocio ("llego tarde", "estoy
+    // afuera"). Se chequea ANTES del ramo de subgrafos porque también está en el
+    // set de tools permitidas y, sin esto, caería al placeholder de subgrafo.
+    if (intent === 'forward_message' && allowed.has('forward_message')) {
+      return 'tool_forward_message' satisfies RouterDestination;
+    }
+
     if (intent !== 'unknown' && allowed.has(intent as ToolName)) {
       return SUBGRAPH_PLACEHOLDER_NODE;
     }
@@ -97,7 +106,12 @@ const TOOL_PATTERNS: ReadonlyArray<{ pattern: RegExp; tool: ToolName }> = [
   { pattern: /\b(verif|acceso|login)/i, tool: 'generate_verification_url' },
   { pattern: /mercado.?pago|cobros|cobrar/i, tool: 'connect_mercado_pago' },
   {
-    pattern: /\b(llegar tarde|estoy afuera|estacionamiento|estoy en la puerta)\b/i,
+    // Avisos de llegada tarde en cualquier conjugación/relleno ("llego tarde",
+    // "llegaré tarde", "llegare un poco tarde", "voy a llegar 10 min tarde") +
+    // las frases de presencia física. Los typos extremos ("lelgare") los cubre
+    // el classifier vía intent='forward_message'; esto es solo el fast-path.
+    pattern:
+      /\blleg[\wáéíóúñ]*(?:\s+\S+){0,3}\s+tarde\b|\bestoy afuera\b|\bestacionamiento\b|\bestoy en la puerta\b/i,
     tool: 'forward_message',
   },
 ];

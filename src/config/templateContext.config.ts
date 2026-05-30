@@ -26,7 +26,7 @@ export const TEMPLATE_CONTEXT_REGISTRY: readonly TemplateContextEntry[] = [
     prefixes: ['p1_confirm_appointment', 'p2_confirm_appointment'],
     description: 'Pedido de confirmación de un turno (con fecha, hora y servicio).',
     suggestedIntentHint:
-      'Si responde afirmativo ("sí", "dale", "confirmo", "ok") quiere CONFIRMAR el turno; si responde negativo ("no", "cancelá", "no puedo") quiere CANCELARLO.',
+      'Si responde afirmativo ("sí", "dale", "confirmo", "ok") quiere CONFIRMAR el turno; si responde negativo ("no", "cancelá", "no puedo") quiere CANCELARLO. Si en cambio avisa otra cosa (que llegará tarde, que está en la puerta, una consulta), NO es confirmar ni cancelar → usá "forward_message".',
   },
   {
     prefixes: ['p5_appointment_reminder', 'p11_appointment_reminder'],

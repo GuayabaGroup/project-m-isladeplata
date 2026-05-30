@@ -29,7 +29,16 @@ export type MessageType =
   /** El cliente pide explícitamente un humano (capa A, spec P-human-takeover).
    * Solo lo emite el clasificador cuando `HUMAN_TAKEOVER_ENABLED`. */
   | 'human_request';
-export type Intent = 'schedule' | 'reschedule' | 'cancel' | 'confirm' | 'unknown';
+export type Intent =
+  | 'schedule'
+  | 'reschedule'
+  | 'cancel'
+  | 'confirm'
+  /** El usuario quiere AVISAR algo al negocio (llego tarde, estoy en la puerta,
+   * una consulta) — no es agendar/cancelar/confirmar/reagendar. Rutea a la tool
+   * atómica `forward_message`, no a un subgrafo. */
+  | 'forward_message'
+  | 'unknown';
 
 export interface RoutingState {
   /** Which subgraph is currently active (set by supervisor on the way in). */

@@ -172,6 +172,14 @@ describe('routeFromSupervisor', () => {
     ).toBe('subgraph_placeholder');
   });
 
+  it('action+forward_message → tool_forward_message (tool atómica, no subgrafo)', () => {
+    expect(
+      routeFromSupervisor(
+        makeState({ messageType: 'action', intent: 'forward_message', confidence: 0.8 }),
+      ),
+    ).toBe('tool_forward_message');
+  });
+
   it('no messageType (no classifier output) → social fallback', () => {
     expect(routeFromSupervisor(makeState({}))).toBe('social_responder');
   });
@@ -196,6 +204,18 @@ describe('detectAtomicTool', () => {
   it('matches "estoy en la puerta" → forward_message', () => {
     expect(detectAtomicTool('voy a llegar tarde')).toBe('forward_message');
     expect(detectAtomicTool('estoy en la puerta')).toBe('forward_message');
+  });
+
+  it('matches "llegar tarde" en distintas conjugaciones/relleno → forward_message', () => {
+    expect(detectAtomicTool('creo que llegaré un poco tarde')).toBe('forward_message');
+    expect(detectAtomicTool('llegare un poco tarde')).toBe('forward_message');
+    expect(detectAtomicTool('llego 10 min tarde')).toBe('forward_message');
+    expect(detectAtomicTool('hay estacionamiento')).toBe('forward_message');
+  });
+
+  it('no confunde "tarde" sin "llegar" (saludo / turno por la tarde)', () => {
+    expect(detectAtomicTool('buenas tardes')).toBeNull();
+    expect(detectAtomicTool('quiero un turno por la tarde')).toBeNull();
   });
 
   it('returns null on no match', () => {

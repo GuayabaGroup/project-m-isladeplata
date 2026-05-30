@@ -101,6 +101,19 @@ describe('classifyIntent node', () => {
     });
   });
 
+  it('acepta intent forward_message (aviso al negocio, no confirm)', async () => {
+    const llm = makeProvider(
+      '{"messageType":"action","intent":"forward_message","confidence":0.8}',
+    );
+    const node = makeClassifyIntentNode({ llm, logger: mockLogger });
+    const update = await node(makeState('creo que llegaré 15 min tarde'));
+    expect(update.routing).toEqual({
+      messageType: 'action',
+      intent: 'forward_message',
+      confidence: 0.8,
+    });
+  });
+
   it('parses JSON embedded in markdown fence', async () => {
     const llm = makeProvider('```json\n{"messageType":"farewell","confidence":0.9}\n```');
     const node = makeClassifyIntentNode({ llm, logger: mockLogger });
